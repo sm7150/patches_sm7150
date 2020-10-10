@@ -1,0 +1,4377 @@
+From 6df57f262989094248bea31cec7dc1cc9e8f23ff Mon Sep 17 00:00:00 2001
+From: firemax13 <mydadisbrave2@gmail.com>
+Date: Sat, 10 Oct 2020 11:34:08 +0800
+Subject: [PATCH] a70q: Dont do Radio and Doze
+
+- Doze it already defined in a70q device tree and it prevent to compile if found
+- Radio hals and libs is already exist and defined in a70q device tree and its the same
+
+- WIP Tag
+- This will be reverted soon as a70q will use hardware/samsung as doze and radio including
+
+Signed-off-by: firemax13 <mydadisbrave2@gmail.com>
+---
+ Android.mk                                    |    1 -
+ hidl/radio/1.3/Android.bp                     |   24 -
+ hidl/radio/1.3/Radio.cpp                      |  854 -----------
+ hidl/radio/1.3/Radio.h                        |  303 ----
+ hidl/radio/1.3/SecRadioIndication.cpp         |  513 -------
+ hidl/radio/1.3/SecRadioIndication.h           |  226 ---
+ hidl/radio/1.3/SecRadioResponse.cpp           | 1273 -----------------
+ hidl/radio/1.3/SecRadioResponse.h             |  563 --------
+ ...ardware.radio@1.3-radio-service.samsung.rc |    4 -
+ hidl/radio/1.3/radio-service.cpp              |   45 -
+ interfaces/Android.bp                         |    4 -
+ interfaces/current.txt                        |    4 -
+ interfaces/radio/1.2/Android.bp               |   20 -
+ interfaces/radio/1.2/IRadio.hal               |   72 -
+ interfaces/radio/1.2/IRadioIndication.hal     |   35 -
+ interfaces/radio/1.2/IRadioResponse.hal       |   69 -
+ interfaces/radio/1.2/types.hal                |  209 ---
+ 17 files changed, 4219 deletions(-)
+ delete mode 100644 hidl/radio/1.3/Android.bp
+ delete mode 100644 hidl/radio/1.3/Radio.cpp
+ delete mode 100644 hidl/radio/1.3/Radio.h
+ delete mode 100644 hidl/radio/1.3/SecRadioIndication.cpp
+ delete mode 100644 hidl/radio/1.3/SecRadioIndication.h
+ delete mode 100644 hidl/radio/1.3/SecRadioResponse.cpp
+ delete mode 100644 hidl/radio/1.3/SecRadioResponse.h
+ delete mode 100644 hidl/radio/1.3/android.hardware.radio@1.3-radio-service.samsung.rc
+ delete mode 100644 hidl/radio/1.3/radio-service.cpp
+ delete mode 100644 interfaces/Android.bp
+ delete mode 100644 interfaces/current.txt
+ delete mode 100644 interfaces/radio/1.2/Android.bp
+ delete mode 100644 interfaces/radio/1.2/IRadio.hal
+ delete mode 100644 interfaces/radio/1.2/IRadioIndication.hal
+ delete mode 100644 interfaces/radio/1.2/IRadioResponse.hal
+ delete mode 100644 interfaces/radio/1.2/types.hal
+
+diff --git a/Android.mk b/Android.mk
+index d9efe58..8b0e792 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -43,7 +43,6 @@ endif
+ ifeq ($(BOARD_VENDOR),samsung)
+ include $(SAM_ROOT)/AdvancedDisplay/Android.mk
+ include $(SAM_ROOT)/audio/Android.mk
+-include $(SAM_ROOT)/doze/Android.mk
+ include $(SAM_ROOT)/dtbhtool/Android.mk
+ include $(SAM_ROOT)/hidl/Android.mk
+ include $(SAM_ROOT)/modemloader/Android.mk
+diff --git a/hidl/radio/1.3/Android.bp b/hidl/radio/1.3/Android.bp
+deleted file mode 100644
+index 8d5e57e..0000000
+--- a/hidl/radio/1.3/Android.bp
++++ /dev/null
+@@ -1,24 +0,0 @@
+-cc_binary {
+-    name: "android.hardware.radio@1.3-radio-service.samsung",
+-    init_rc: ["android.hardware.radio@1.3-radio-service.samsung.rc"],
+-    relative_install_path: "hw",
+-    vendor: true,
+-    srcs: [
+-        "Radio.cpp",
+-        "SecRadioIndication.cpp",
+-        "SecRadioResponse.cpp",
+-        "radio-service.cpp",
+-    ],
+-    shared_libs: [
+-        "libhidlbase",
+-        "libhidltransport",
+-        "liblog",
+-        "libutils",
+-        "android.hardware.radio@1.0",
+-        "android.hardware.radio@1.1",
+-        "android.hardware.radio@1.2",
+-        "android.hardware.radio@1.3",
+-        "vendor.samsung.hardware.radio@1.2",
+-        "android.hidl.safe_union@1.0",
+-    ],
+-}
+diff --git a/hidl/radio/1.3/Radio.cpp b/hidl/radio/1.3/Radio.cpp
+deleted file mode 100644
+index f4e7e46..0000000
+--- a/hidl/radio/1.3/Radio.cpp
++++ /dev/null
+@@ -1,854 +0,0 @@
+-/*
+- * Copyright (C) 2019, The LineageOS Project
+- *
+- * Licensed under the Apache License, Version 2.1 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.1
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#include "Radio.h"
+-
+-namespace android {
+-namespace hardware {
+-namespace radio {
+-namespace V1_3 {
+-namespace implementation {
+-
+-Radio::Radio(const std::string& interfaceName) : interfaceName(interfaceName) {}
+-
+-sp<::vendor::samsung::hardware::radio::V1_2::IRadio> Radio::getSecIRadio() {
+-    std::lock_guard<std::mutex> lock(secIRadioMutex);
+-    if (!secIRadio) {
+-        secIRadio = ::vendor::samsung::hardware::radio::V1_2::IRadio::getService(interfaceName);
+-    }
+-    return secIRadio;
+-}
+-
+-// Methods from ::android::hardware::radio::V1_0::IRadio follow.
+-Return<void> Radio::setResponseFunctions(
+-    const sp<::android::hardware::radio::V1_0::IRadioResponse>& radioResponse,
+-    const sp<::android::hardware::radio::V1_0::IRadioIndication>& radioIndication) {
+-    sp<::vendor::samsung::hardware::radio::V1_2::IRadioResponse> secRadioResponse =
+-        new SecRadioResponse(
+-            interfaceName == RIL1_SERVICE_NAME ? 1 : 2,
+-            ::android::hardware::radio::V1_2::IRadioResponse::castFrom(radioResponse)
+-                .withDefault(nullptr));
+-    sp<::vendor::samsung::hardware::radio::V1_2::IRadioIndication> secRadioIndication =
+-        new SecRadioIndication(
+-            ::android::hardware::radio::V1_2::IRadioIndication::castFrom(radioIndication)
+-                .withDefault(nullptr));
+-    getSecIRadio()->setResponseFunctions(secRadioResponse, secRadioIndication);
+-    return Void();
+-}
+-
+-Return<void> Radio::getIccCardStatus(int32_t serial) {
+-    getSecIRadio()->getIccCardStatus(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::supplyIccPinForApp(int32_t serial, const hidl_string& pin,
+-                                       const hidl_string& aid) {
+-    getSecIRadio()->supplyIccPinForApp(serial, pin, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::supplyIccPukForApp(int32_t serial, const hidl_string& puk,
+-                                       const hidl_string& pin, const hidl_string& aid) {
+-    getSecIRadio()->supplyIccPukForApp(serial, puk, pin, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::supplyIccPin2ForApp(int32_t serial, const hidl_string& pin2,
+-                                        const hidl_string& aid) {
+-    getSecIRadio()->supplyIccPin2ForApp(serial, pin2, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::supplyIccPuk2ForApp(int32_t serial, const hidl_string& puk2,
+-                                        const hidl_string& pin2, const hidl_string& aid) {
+-    getSecIRadio()->supplyIccPuk2ForApp(serial, puk2, pin2, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::changeIccPinForApp(int32_t serial, const hidl_string& oldPin,
+-                                       const hidl_string& newPin, const hidl_string& aid) {
+-    getSecIRadio()->changeIccPinForApp(serial, oldPin, newPin, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::changeIccPin2ForApp(int32_t serial, const hidl_string& oldPin2,
+-                                        const hidl_string& newPin2, const hidl_string& aid) {
+-    getSecIRadio()->changeIccPin2ForApp(serial, oldPin2, newPin2, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::supplyNetworkDepersonalization(int32_t serial, const hidl_string& netPin) {
+-    getSecIRadio()->supplyNetworkDepersonalization(serial, netPin);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCurrentCalls(int32_t serial) {
+-    getSecIRadio()->getCurrentCalls(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::dial(int32_t serial, const ::android::hardware::radio::V1_0::Dial& dialInfo) {
+-    getSecIRadio()->dial(serial, dialInfo);
+-    return Void();
+-}
+-
+-Return<void> Radio::getImsiForApp(int32_t serial, const hidl_string& aid) {
+-    getSecIRadio()->getImsiForApp(serial, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::hangup(int32_t serial, int32_t gsmIndex) {
+-    getSecIRadio()->hangup(serial, gsmIndex);
+-    return Void();
+-}
+-
+-Return<void> Radio::hangupWaitingOrBackground(int32_t serial) {
+-    getSecIRadio()->hangupWaitingOrBackground(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::hangupForegroundResumeBackground(int32_t serial) {
+-    getSecIRadio()->hangupForegroundResumeBackground(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::switchWaitingOrHoldingAndActive(int32_t serial) {
+-    getSecIRadio()->switchWaitingOrHoldingAndActive(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::conference(int32_t serial) {
+-    getSecIRadio()->conference(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::rejectCall(int32_t serial) {
+-    getSecIRadio()->rejectCall(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getLastCallFailCause(int32_t serial) {
+-    getSecIRadio()->getLastCallFailCause(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getSignalStrength(int32_t serial) {
+-    getSecIRadio()->getSignalStrength(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getVoiceRegistrationState(int32_t serial) {
+-    getSecIRadio()->getVoiceRegistrationState(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getDataRegistrationState(int32_t serial) {
+-    getSecIRadio()->getDataRegistrationState(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getOperator(int32_t serial) {
+-    getSecIRadio()->getOperator(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setRadioPower(int32_t serial, bool on) {
+-    getSecIRadio()->setRadioPower(serial, on);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendDtmf(int32_t serial, const hidl_string& s) {
+-    getSecIRadio()->sendDtmf(serial, s);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendSms(int32_t serial,
+-                            const ::android::hardware::radio::V1_0::GsmSmsMessage& message) {
+-    getSecIRadio()->sendSms(serial, message);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendSMSExpectMore(
+-    int32_t serial, const ::android::hardware::radio::V1_0::GsmSmsMessage& message) {
+-    getSecIRadio()->sendSMSExpectMore(serial, message);
+-    return Void();
+-}
+-
+-Return<void> Radio::setupDataCall(
+-    int32_t serial, ::android::hardware::radio::V1_0::RadioTechnology radioTechnology,
+-    const ::android::hardware::radio::V1_0::DataProfileInfo& dataProfileInfo, bool modemCognitive,
+-    bool roamingAllowed, bool isRoaming) {
+-    getSecIRadio()->setupDataCall(serial, radioTechnology, dataProfileInfo, modemCognitive,
+-                                  roamingAllowed, isRoaming);
+-    return Void();
+-}
+-
+-Return<void> Radio::iccIOForApp(int32_t serial,
+-                                const ::android::hardware::radio::V1_0::IccIo& iccIo) {
+-    getSecIRadio()->iccIOForApp(serial, iccIo);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendUssd(int32_t serial, const hidl_string& ussd) {
+-    getSecIRadio()->sendUssd(serial, ussd);
+-    return Void();
+-}
+-
+-Return<void> Radio::cancelPendingUssd(int32_t serial) {
+-    getSecIRadio()->cancelPendingUssd(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getClir(int32_t serial) {
+-    getSecIRadio()->getClir(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setClir(int32_t serial, int32_t status) {
+-    getSecIRadio()->setClir(serial, status);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCallForwardStatus(
+-    int32_t serial, const ::android::hardware::radio::V1_0::CallForwardInfo& callInfo) {
+-    getSecIRadio()->getCallForwardStatus(serial, callInfo);
+-    return Void();
+-}
+-
+-Return<void> Radio::setCallForward(
+-    int32_t serial, const ::android::hardware::radio::V1_0::CallForwardInfo& callInfo) {
+-    getSecIRadio()->setCallForward(serial, callInfo);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCallWaiting(int32_t serial, int32_t serviceClass) {
+-    getSecIRadio()->getCallWaiting(serial, serviceClass);
+-    return Void();
+-}
+-
+-Return<void> Radio::setCallWaiting(int32_t serial, bool enable, int32_t serviceClass) {
+-    getSecIRadio()->setCallWaiting(serial, enable, serviceClass);
+-    return Void();
+-}
+-
+-Return<void> Radio::acknowledgeLastIncomingGsmSms(
+-    int32_t serial, bool success, ::android::hardware::radio::V1_0::SmsAcknowledgeFailCause cause) {
+-    getSecIRadio()->acknowledgeLastIncomingGsmSms(serial, success, cause);
+-    return Void();
+-}
+-
+-Return<void> Radio::acceptCall(int32_t serial) {
+-    getSecIRadio()->acceptCall(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::deactivateDataCall(int32_t serial, int32_t cid, bool reasonRadioShutDown) {
+-    getSecIRadio()->deactivateDataCall(serial, cid, reasonRadioShutDown);
+-    return Void();
+-}
+-
+-Return<void> Radio::getFacilityLockForApp(int32_t serial, const hidl_string& facility,
+-                                          const hidl_string& password, int32_t serviceClass,
+-                                          const hidl_string& appId) {
+-    getSecIRadio()->getFacilityLockForApp(serial, facility, password, serviceClass, appId);
+-    return Void();
+-}
+-
+-Return<void> Radio::setFacilityLockForApp(int32_t serial, const hidl_string& facility,
+-                                          bool lockState, const hidl_string& password,
+-                                          int32_t serviceClass, const hidl_string& appId) {
+-    getSecIRadio()->setFacilityLockForApp(serial, facility, lockState, password, serviceClass,
+-                                          appId);
+-    return Void();
+-}
+-
+-Return<void> Radio::setBarringPassword(int32_t serial, const hidl_string& facility,
+-                                       const hidl_string& oldPassword,
+-                                       const hidl_string& newPassword) {
+-    getSecIRadio()->setBarringPassword(serial, facility, oldPassword, newPassword);
+-    return Void();
+-}
+-
+-Return<void> Radio::getNetworkSelectionMode(int32_t serial) {
+-    getSecIRadio()->getNetworkSelectionMode(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setNetworkSelectionModeAutomatic(int32_t serial) {
+-    getSecIRadio()->setNetworkSelectionModeAutomatic(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setNetworkSelectionModeManual(int32_t serial,
+-                                                  const hidl_string& operatorNumeric) {
+-    getSecIRadio()->setNetworkSelectionModeManual(serial, operatorNumeric);
+-    return Void();
+-}
+-
+-Return<void> Radio::getAvailableNetworks(int32_t serial) {
+-    getSecIRadio()->getAvailableNetworks(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::startDtmf(int32_t serial, const hidl_string& s) {
+-    getSecIRadio()->startDtmf(serial, s);
+-    return Void();
+-}
+-
+-Return<void> Radio::stopDtmf(int32_t serial) {
+-    getSecIRadio()->stopDtmf(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getBasebandVersion(int32_t serial) {
+-    getSecIRadio()->getBasebandVersion(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::separateConnection(int32_t serial, int32_t gsmIndex) {
+-    getSecIRadio()->separateConnection(serial, gsmIndex);
+-    return Void();
+-}
+-
+-Return<void> Radio::setMute(int32_t serial, bool enable) {
+-    getSecIRadio()->setMute(serial, enable);
+-    return Void();
+-}
+-
+-Return<void> Radio::getMute(int32_t serial) {
+-    getSecIRadio()->getMute(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getClip(int32_t serial) {
+-    getSecIRadio()->getClip(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getDataCallList(int32_t serial) {
+-    getSecIRadio()->getDataCallList(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setSuppServiceNotifications(int32_t serial, bool enable) {
+-    getSecIRadio()->setSuppServiceNotifications(serial, enable);
+-    return Void();
+-}
+-
+-Return<void> Radio::writeSmsToSim(
+-    int32_t serial, const ::android::hardware::radio::V1_0::SmsWriteArgs& smsWriteArgs) {
+-    getSecIRadio()->writeSmsToSim(serial, smsWriteArgs);
+-    return Void();
+-}
+-
+-Return<void> Radio::deleteSmsOnSim(int32_t serial, int32_t index) {
+-    getSecIRadio()->deleteSmsOnSim(serial, index);
+-    return Void();
+-}
+-
+-Return<void> Radio::setBandMode(int32_t serial,
+-                                ::android::hardware::radio::V1_0::RadioBandMode mode) {
+-    getSecIRadio()->setBandMode(serial, mode);
+-    return Void();
+-}
+-
+-Return<void> Radio::getAvailableBandModes(int32_t serial) {
+-    getSecIRadio()->getAvailableBandModes(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendEnvelope(int32_t serial, const hidl_string& command) {
+-    getSecIRadio()->sendEnvelope(serial, command);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendTerminalResponseToSim(int32_t serial, const hidl_string& commandResponse) {
+-    getSecIRadio()->sendTerminalResponseToSim(serial, commandResponse);
+-    return Void();
+-}
+-
+-Return<void> Radio::handleStkCallSetupRequestFromSim(int32_t serial, bool accept) {
+-    getSecIRadio()->handleStkCallSetupRequestFromSim(serial, accept);
+-    return Void();
+-}
+-
+-Return<void> Radio::explicitCallTransfer(int32_t serial) {
+-    getSecIRadio()->explicitCallTransfer(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setPreferredNetworkType(
+-    int32_t serial, ::android::hardware::radio::V1_0::PreferredNetworkType nwType) {
+-    getSecIRadio()->setPreferredNetworkType(serial, nwType);
+-    return Void();
+-}
+-
+-Return<void> Radio::getPreferredNetworkType(int32_t serial) {
+-    getSecIRadio()->getPreferredNetworkType(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getNeighboringCids(int32_t serial) {
+-    getSecIRadio()->getNeighboringCids(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setLocationUpdates(int32_t serial, bool enable) {
+-    getSecIRadio()->setLocationUpdates(serial, enable);
+-    return Void();
+-}
+-
+-Return<void> Radio::setCdmaSubscriptionSource(
+-    int32_t serial, ::android::hardware::radio::V1_0::CdmaSubscriptionSource cdmaSub) {
+-    getSecIRadio()->setCdmaSubscriptionSource(serial, cdmaSub);
+-    return Void();
+-}
+-
+-Return<void> Radio::setCdmaRoamingPreference(int32_t serial,
+-                                             ::android::hardware::radio::V1_0::CdmaRoamingType type) {
+-    getSecIRadio()->setCdmaRoamingPreference(serial, type);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCdmaRoamingPreference(int32_t serial) {
+-    getSecIRadio()->getCdmaRoamingPreference(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setTTYMode(int32_t serial, ::android::hardware::radio::V1_0::TtyMode mode) {
+-    getSecIRadio()->setTTYMode(serial, mode);
+-    return Void();
+-}
+-
+-Return<void> Radio::getTTYMode(int32_t serial) {
+-    getSecIRadio()->getTTYMode(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setPreferredVoicePrivacy(int32_t serial, bool enable) {
+-    getSecIRadio()->setPreferredVoicePrivacy(serial, enable);
+-    return Void();
+-}
+-
+-Return<void> Radio::getPreferredVoicePrivacy(int32_t serial) {
+-    getSecIRadio()->getPreferredVoicePrivacy(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendCDMAFeatureCode(int32_t serial, const hidl_string& featureCode) {
+-    getSecIRadio()->sendCDMAFeatureCode(serial, featureCode);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendBurstDtmf(int32_t serial, const hidl_string& dtmf, int32_t on, int32_t off) {
+-    getSecIRadio()->sendBurstDtmf(serial, dtmf, on, off);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendCdmaSms(int32_t serial,
+-                                const ::android::hardware::radio::V1_0::CdmaSmsMessage& sms) {
+-    getSecIRadio()->sendCdmaSms(serial, sms);
+-    return Void();
+-}
+-
+-Return<void> Radio::acknowledgeLastIncomingCdmaSms(
+-    int32_t serial, const ::android::hardware::radio::V1_0::CdmaSmsAck& smsAck) {
+-    getSecIRadio()->acknowledgeLastIncomingCdmaSms(serial, smsAck);
+-    return Void();
+-}
+-
+-Return<void> Radio::getGsmBroadcastConfig(int32_t serial) {
+-    getSecIRadio()->getGsmBroadcastConfig(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setGsmBroadcastConfig(
+-    int32_t serial,
+-    const hidl_vec<::android::hardware::radio::V1_0::GsmBroadcastSmsConfigInfo>& configInfo) {
+-    getSecIRadio()->setGsmBroadcastConfig(serial, configInfo);
+-    return Void();
+-}
+-
+-Return<void> Radio::setGsmBroadcastActivation(int32_t serial, bool activate) {
+-    getSecIRadio()->setGsmBroadcastActivation(serial, activate);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCdmaBroadcastConfig(int32_t serial) {
+-    getSecIRadio()->getCdmaBroadcastConfig(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setCdmaBroadcastConfig(
+-    int32_t serial,
+-    const hidl_vec<::android::hardware::radio::V1_0::CdmaBroadcastSmsConfigInfo>& configInfo) {
+-    getSecIRadio()->setCdmaBroadcastConfig(serial, configInfo);
+-    return Void();
+-}
+-
+-Return<void> Radio::setCdmaBroadcastActivation(int32_t serial, bool activate) {
+-    getSecIRadio()->setCdmaBroadcastActivation(serial, activate);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCDMASubscription(int32_t serial) {
+-    getSecIRadio()->getCDMASubscription(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::writeSmsToRuim(
+-    int32_t serial, const ::android::hardware::radio::V1_0::CdmaSmsWriteArgs& cdmaSms) {
+-    getSecIRadio()->writeSmsToRuim(serial, cdmaSms);
+-    return Void();
+-}
+-
+-Return<void> Radio::deleteSmsOnRuim(int32_t serial, int32_t index) {
+-    getSecIRadio()->deleteSmsOnRuim(serial, index);
+-    return Void();
+-}
+-
+-Return<void> Radio::getDeviceIdentity(int32_t serial) {
+-    getSecIRadio()->getDeviceIdentity(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::exitEmergencyCallbackMode(int32_t serial) {
+-    getSecIRadio()->exitEmergencyCallbackMode(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getSmscAddress(int32_t serial) {
+-    getSecIRadio()->getSmscAddress(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setSmscAddress(int32_t serial, const hidl_string& smsc) {
+-    getSecIRadio()->setSmscAddress(serial, smsc);
+-    return Void();
+-}
+-
+-Return<void> Radio::reportSmsMemoryStatus(int32_t serial, bool available) {
+-    getSecIRadio()->reportSmsMemoryStatus(serial, available);
+-    return Void();
+-}
+-
+-Return<void> Radio::reportStkServiceIsRunning(int32_t serial) {
+-    getSecIRadio()->reportStkServiceIsRunning(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCdmaSubscriptionSource(int32_t serial) {
+-    getSecIRadio()->getCdmaSubscriptionSource(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::requestIsimAuthentication(int32_t serial, const hidl_string& challenge) {
+-    getSecIRadio()->requestIsimAuthentication(serial, challenge);
+-    return Void();
+-}
+-
+-Return<void> Radio::acknowledgeIncomingGsmSmsWithPdu(int32_t serial, bool success,
+-                                                     const hidl_string& ackPdu) {
+-    getSecIRadio()->acknowledgeIncomingGsmSmsWithPdu(serial, success, ackPdu);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendEnvelopeWithStatus(int32_t serial, const hidl_string& contents) {
+-    getSecIRadio()->sendEnvelopeWithStatus(serial, contents);
+-    return Void();
+-}
+-
+-Return<void> Radio::getVoiceRadioTechnology(int32_t serial) {
+-    getSecIRadio()->getVoiceRadioTechnology(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getCellInfoList(int32_t serial) {
+-    getSecIRadio()->getCellInfoList(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setCellInfoListRate(int32_t serial, int32_t rate) {
+-    getSecIRadio()->setCellInfoListRate(serial, rate);
+-    return Void();
+-}
+-
+-Return<void> Radio::setInitialAttachApn(
+-    int32_t serial, const ::android::hardware::radio::V1_0::DataProfileInfo& dataProfileInfo,
+-    bool modemCognitive, bool isRoaming) {
+-    getSecIRadio()->setInitialAttachApn(serial, dataProfileInfo, modemCognitive, isRoaming);
+-    return Void();
+-}
+-
+-Return<void> Radio::getImsRegistrationState(int32_t serial) {
+-    getSecIRadio()->getImsRegistrationState(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendImsSms(int32_t serial,
+-                               const ::android::hardware::radio::V1_0::ImsSmsMessage& message) {
+-    getSecIRadio()->sendImsSms(serial, message);
+-    return Void();
+-}
+-
+-Return<void> Radio::iccTransmitApduBasicChannel(
+-    int32_t serial, const ::android::hardware::radio::V1_0::SimApdu& message) {
+-    getSecIRadio()->iccTransmitApduBasicChannel(serial, message);
+-    return Void();
+-}
+-
+-Return<void> Radio::iccOpenLogicalChannel(int32_t serial, const hidl_string& aid, int32_t p2) {
+-    getSecIRadio()->iccOpenLogicalChannel(serial, aid, p2);
+-    return Void();
+-}
+-
+-Return<void> Radio::iccCloseLogicalChannel(int32_t serial, int32_t channelId) {
+-    getSecIRadio()->iccCloseLogicalChannel(serial, channelId);
+-    return Void();
+-}
+-
+-Return<void> Radio::iccTransmitApduLogicalChannel(
+-    int32_t serial, const ::android::hardware::radio::V1_0::SimApdu& message) {
+-    getSecIRadio()->iccTransmitApduLogicalChannel(serial, message);
+-    return Void();
+-}
+-
+-Return<void> Radio::nvReadItem(int32_t serial, ::android::hardware::radio::V1_0::NvItem itemId) {
+-    getSecIRadio()->nvReadItem(serial, itemId);
+-    return Void();
+-}
+-
+-Return<void> Radio::nvWriteItem(int32_t serial,
+-                                const ::android::hardware::radio::V1_0::NvWriteItem& item) {
+-    getSecIRadio()->nvWriteItem(serial, item);
+-    return Void();
+-}
+-
+-Return<void> Radio::nvWriteCdmaPrl(int32_t serial, const hidl_vec<uint8_t>& prl) {
+-    getSecIRadio()->nvWriteCdmaPrl(serial, prl);
+-    return Void();
+-}
+-
+-Return<void> Radio::nvResetConfig(int32_t serial,
+-                                  ::android::hardware::radio::V1_0::ResetNvType resetType) {
+-    getSecIRadio()->nvResetConfig(serial, resetType);
+-    return Void();
+-}
+-
+-Return<void> Radio::setUiccSubscription(
+-    int32_t serial, const ::android::hardware::radio::V1_0::SelectUiccSub& uiccSub) {
+-    getSecIRadio()->setUiccSubscription(serial, uiccSub);
+-    return Void();
+-}
+-
+-Return<void> Radio::setDataAllowed(int32_t serial, bool allow) {
+-    getSecIRadio()->setDataAllowed(serial, allow);
+-    return Void();
+-}
+-
+-Return<void> Radio::getHardwareConfig(int32_t serial) {
+-    getSecIRadio()->getHardwareConfig(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::requestIccSimAuthentication(int32_t serial, int32_t authContext,
+-                                                const hidl_string& authData,
+-                                                const hidl_string& aid) {
+-    getSecIRadio()->requestIccSimAuthentication(serial, authContext, authData, aid);
+-    return Void();
+-}
+-
+-Return<void> Radio::setDataProfile(
+-    int32_t serial, const hidl_vec<::android::hardware::radio::V1_0::DataProfileInfo>& profiles,
+-    bool isRoaming) {
+-    getSecIRadio()->setDataProfile(serial, profiles, isRoaming);
+-    return Void();
+-}
+-
+-Return<void> Radio::requestShutdown(int32_t serial) {
+-    getSecIRadio()->requestShutdown(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getRadioCapability(int32_t serial) {
+-    getSecIRadio()->getRadioCapability(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setRadioCapability(int32_t serial,
+-                                       const ::android::hardware::radio::V1_0::RadioCapability& rc) {
+-    getSecIRadio()->setRadioCapability(serial, rc);
+-    return Void();
+-}
+-
+-Return<void> Radio::startLceService(int32_t serial, int32_t reportInterval, bool pullMode) {
+-    getSecIRadio()->startLceService(serial, reportInterval, pullMode);
+-    return Void();
+-}
+-
+-Return<void> Radio::stopLceService(int32_t serial) {
+-    getSecIRadio()->stopLceService(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::pullLceData(int32_t serial) {
+-    getSecIRadio()->pullLceData(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::getModemActivityInfo(int32_t serial) {
+-    getSecIRadio()->getModemActivityInfo(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::setAllowedCarriers(
+-    int32_t serial, bool allAllowed,
+-    const ::android::hardware::radio::V1_0::CarrierRestrictions& carriers) {
+-    getSecIRadio()->setAllowedCarriers(serial, allAllowed, carriers);
+-    return Void();
+-}
+-
+-Return<void> Radio::getAllowedCarriers(int32_t serial) {
+-    getSecIRadio()->getAllowedCarriers(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::sendDeviceState(
+-    int32_t serial, ::android::hardware::radio::V1_0::DeviceStateType deviceStateType, bool state) {
+-    getSecIRadio()->sendDeviceState(serial, deviceStateType, state);
+-    return Void();
+-}
+-
+-Return<void> Radio::setIndicationFilter(
+-    int32_t serial,
+-    hidl_bitfield<::android::hardware::radio::V1_2::IndicationFilter> indicationFilter) {
+-    getSecIRadio()->setIndicationFilter(serial, indicationFilter);
+-    return Void();
+-}
+-
+-Return<void> Radio::setSimCardPower(int32_t serial, bool powerUp) {
+-    getSecIRadio()->setSimCardPower(serial, powerUp);
+-    return Void();
+-}
+-
+-Return<void> Radio::responseAcknowledgement() {
+-    getSecIRadio()->responseAcknowledgement();
+-    return Void();
+-}
+-
+-// Methods from ::android::hardware::radio::V1_1::IRadio follow.
+-Return<void> Radio::setCarrierInfoForImsiEncryption(
+-    int32_t serial, const ::android::hardware::radio::V1_1::ImsiEncryptionInfo& imsiEncryptionInfo) {
+-    getSecIRadio()->setCarrierInfoForImsiEncryption(serial, imsiEncryptionInfo);
+-    return Void();
+-}
+-
+-Return<void> Radio::setSimCardPower_1_1(int32_t serial,
+-                                        ::android::hardware::radio::V1_1::CardPowerState powerUp) {
+-    getSecIRadio()->setSimCardPower_1_1(serial, powerUp);
+-    return Void();
+-}
+-
+-Return<void> Radio::startNetworkScan(
+-    int32_t serial, const ::android::hardware::radio::V1_1::NetworkScanRequest& request) {
+-    getSecIRadio()->startNetworkScan(serial, request);
+-    return Void();
+-}
+-
+-Return<void> Radio::stopNetworkScan(int32_t serial) {
+-    getSecIRadio()->stopNetworkScan(serial);
+-    return Void();
+-}
+-
+-Return<void> Radio::startKeepalive(
+-    int32_t serial, const ::android::hardware::radio::V1_1::KeepaliveRequest& keepalive) {
+-    getSecIRadio()->startKeepalive(serial, keepalive);
+-    return Void();
+-}
+-
+-Return<void> Radio::stopKeepalive(int32_t serial, int32_t sessionHandle) {
+-    getSecIRadio()->stopKeepalive(serial, sessionHandle);
+-    return Void();
+-}
+-
+-// Methods from ::android::hardware::radio::V1_2::IRadio follow.
+-Return<void> Radio::startNetworkScan_1_2(
+-    int32_t serial, const ::android::hardware::radio::V1_2::NetworkScanRequest& request) {
+-    getSecIRadio()->startNetworkScan_1_2(serial, request);
+-    return Void();
+-}
+-
+-Return<void> Radio::setIndicationFilter_1_2(
+-    int32_t serial,
+-    hidl_bitfield<::android::hardware::radio::V1_2::IndicationFilter> indicationFilter) {
+-    getSecIRadio()->setIndicationFilter_1_2(serial, indicationFilter);
+-    return Void();
+-}
+-
+-Return<void> Radio::setSignalStrengthReportingCriteria(
+-    int32_t serial, int32_t hysteresisMs, int32_t hysteresisDb,
+-    const hidl_vec<int32_t>& thresholdsDbm,
+-    ::android::hardware::radio::V1_2::AccessNetwork accessNetwork) {
+-    getSecIRadio()->setSignalStrengthReportingCriteria(serial, hysteresisMs, hysteresisDb,
+-                                                       thresholdsDbm, accessNetwork);
+-    return Void();
+-}
+-
+-Return<void> Radio::setLinkCapacityReportingCriteria(
+-    int32_t serial, int32_t hysteresisMs, int32_t hysteresisDlKbps, int32_t hysteresisUlKbps,
+-    const hidl_vec<int32_t>& thresholdsDownlinkKbps, const hidl_vec<int32_t>& thresholdsUplinkKbps,
+-    ::android::hardware::radio::V1_2::AccessNetwork accessNetwork) {
+-    getSecIRadio()->setLinkCapacityReportingCriteria(serial, hysteresisMs, hysteresisDlKbps,
+-                                                     hysteresisUlKbps, thresholdsDownlinkKbps,
+-                                                     thresholdsUplinkKbps, accessNetwork);
+-    return Void();
+-}
+-
+-Return<void> Radio::setupDataCall_1_2(
+-    int32_t serial, ::android::hardware::radio::V1_2::AccessNetwork accessNetwork,
+-    const ::android::hardware::radio::V1_0::DataProfileInfo& dataProfileInfo, bool modemCognitive,
+-    bool roamingAllowed, bool isRoaming, ::android::hardware::radio::V1_2::DataRequestReason reason,
+-    const hidl_vec<hidl_string>& addresses, const hidl_vec<hidl_string>& dnses) {
+-    getSecIRadio()->setupDataCall_1_2(serial, accessNetwork, dataProfileInfo, modemCognitive,
+-                                      roamingAllowed, isRoaming, reason, addresses, dnses);
+-    return Void();
+-}
+-
+-Return<void> Radio::deactivateDataCall_1_2(
+-    int32_t serial, int32_t cid, ::android::hardware::radio::V1_2::DataRequestReason reason) {
+-    getSecIRadio()->deactivateDataCall_1_2(serial, cid, reason);
+-    return Void();
+-}
+-
+-// Methods from ::android::hardware::radio::V1_3::IRadio follow.
+-Return<void> Radio::setSystemSelectionChannels(
+-    int32_t, bool, const hidl_vec<::android::hardware::radio::V1_1::RadioAccessSpecifier>&) {
+-    return Void();
+-}
+-
+-Return<void> Radio::enableModem(int32_t, bool) {
+-    return Void();
+-}
+-
+-Return<void> Radio::getModemStackStatus(int32_t) {
+-    return Void();
+-}
+-
+-}  // namespace implementation
+-}  // namespace V1_3
+-}  // namespace radio
+-}  // namespace hardware
+-}  // namespace android
+diff --git a/hidl/radio/1.3/Radio.h b/hidl/radio/1.3/Radio.h
+deleted file mode 100644
+index b136856..0000000
+--- a/hidl/radio/1.3/Radio.h
++++ /dev/null
+@@ -1,303 +0,0 @@
+-/*
+- * Copyright (C) 2019, The LineageOS Project
+- *
+- * Licensed under the Apache License, Version 2.1 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.1
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#pragma once
+-
+-#include <android/hardware/radio/1.3/IRadio.h>
+-#include <hidl/MQDescriptor.h>
+-#include <hidl/Status.h>
+-#include <vendor/samsung/hardware/radio/1.2/IRadio.h>
+-
+-#include "SecRadioIndication.h"
+-#include "SecRadioResponse.h"
+-
+-namespace android {
+-namespace hardware {
+-namespace radio {
+-namespace V1_3 {
+-namespace implementation {
+-
+-#define RIL1_SERVICE_NAME "slot1"
+-#define RIL2_SERVICE_NAME "slot2"
+-
+-using ::android::sp;
+-using ::android::hardware::hidl_array;
+-using ::android::hardware::hidl_memory;
+-using ::android::hardware::hidl_string;
+-using ::android::hardware::hidl_vec;
+-using ::android::hardware::Return;
+-using ::android::hardware::Void;
+-using ::vendor::samsung::hardware::radio::V1_2::implementation::SecRadioIndication;
+-using ::vendor::samsung::hardware::radio::V1_2::implementation::SecRadioResponse;
+-
+-struct Radio : public IRadio {
+-    std::string interfaceName;
+-    std::mutex secIRadioMutex;
+-    sp<::vendor::samsung::hardware::radio::V1_2::IRadio> secIRadio;
+-
+-    Radio(const std::string& interfaceName);
+-
+-    sp<::vendor::samsung::hardware::radio::V1_2::IRadio> getSecIRadio();
+-
+-    // Methods from ::android::hardware::radio::V1_0::IRadio follow.
+-    Return<void> setResponseFunctions(
+-        const sp<::android::hardware::radio::V1_0::IRadioResponse>& radioResponse,
+-        const sp<::android::hardware::radio::V1_0::IRadioIndication>& radioIndication) override;
+-    Return<void> getIccCardStatus(int32_t serial) override;
+-    Return<void> supplyIccPinForApp(int32_t serial, const hidl_string& pin,
+-                                    const hidl_string& aid) override;
+-    Return<void> supplyIccPukForApp(int32_t serial, const hidl_string& puk, const hidl_string& pin,
+-                                    const hidl_string& aid) override;
+-    Return<void> supplyIccPin2ForApp(int32_t serial, const hidl_string& pin2,
+-                                     const hidl_string& aid) override;
+-    Return<void> supplyIccPuk2ForApp(int32_t serial, const hidl_string& puk2,
+-                                     const hidl_string& pin2, const hidl_string& aid) override;
+-    Return<void> changeIccPinForApp(int32_t serial, const hidl_string& oldPin,
+-                                    const hidl_string& newPin, const hidl_string& aid) override;
+-    Return<void> changeIccPin2ForApp(int32_t serial, const hidl_string& oldPin2,
+-                                     const hidl_string& newPin2, const hidl_string& aid) override;
+-    Return<void> supplyNetworkDepersonalization(int32_t serial, const hidl_string& netPin) override;
+-    Return<void> getCurrentCalls(int32_t serial) override;
+-    Return<void> dial(int32_t serial,
+-                      const ::android::hardware::radio::V1_0::Dial& dialInfo) override;
+-    Return<void> getImsiForApp(int32_t serial, const hidl_string& aid) override;
+-    Return<void> hangup(int32_t serial, int32_t gsmIndex) override;
+-    Return<void> hangupWaitingOrBackground(int32_t serial) override;
+-    Return<void> hangupForegroundResumeBackground(int32_t serial) override;
+-    Return<void> switchWaitingOrHoldingAndActive(int32_t serial) override;
+-    Return<void> conference(int32_t serial) override;
+-    Return<void> rejectCall(int32_t serial) override;
+-    Return<void> getLastCallFailCause(int32_t serial) override;
+-    Return<void> getSignalStrength(int32_t serial) override;
+-    Return<void> getVoiceRegistrationState(int32_t serial) override;
+-    Return<void> getDataRegistrationState(int32_t serial) override;
+-    Return<void> getOperator(int32_t serial) override;
+-    Return<void> setRadioPower(int32_t serial, bool on) override;
+-    Return<void> sendDtmf(int32_t serial, const hidl_string& s) override;
+-    Return<void> sendSms(int32_t serial,
+-                         const ::android::hardware::radio::V1_0::GsmSmsMessage& message) override;
+-    Return<void> sendSMSExpectMore(
+-        int32_t serial, const ::android::hardware::radio::V1_0::GsmSmsMessage& message) override;
+-    Return<void> setupDataCall(
+-        int32_t serial, ::android::hardware::radio::V1_0::RadioTechnology radioTechnology,
+-        const ::android::hardware::radio::V1_0::DataProfileInfo& dataProfileInfo,
+-        bool modemCognitive, bool roamingAllowed, bool isRoaming) override;
+-    Return<void> iccIOForApp(int32_t serial,
+-                             const ::android::hardware::radio::V1_0::IccIo& iccIo) override;
+-    Return<void> sendUssd(int32_t serial, const hidl_string& ussd) override;
+-    Return<void> cancelPendingUssd(int32_t serial) override;
+-    Return<void> getClir(int32_t serial) override;
+-    Return<void> setClir(int32_t serial, int32_t status) override;
+-    Return<void> getCallForwardStatus(
+-        int32_t serial, const ::android::hardware::radio::V1_0::CallForwardInfo& callInfo) override;
+-    Return<void> setCallForward(
+-        int32_t serial, const ::android::hardware::radio::V1_0::CallForwardInfo& callInfo) override;
+-    Return<void> getCallWaiting(int32_t serial, int32_t serviceClass) override;
+-    Return<void> setCallWaiting(int32_t serial, bool enable, int32_t serviceClass) override;
+-    Return<void> acknowledgeLastIncomingGsmSms(
+-        int32_t serial, bool success,
+-        ::android::hardware::radio::V1_0::SmsAcknowledgeFailCause cause) override;
+-    Return<void> acceptCall(int32_t serial) override;
+-    Return<void> deactivateDataCall(int32_t serial, int32_t cid, bool reasonRadioShutDown) override;
+-    Return<void> getFacilityLockForApp(int32_t serial, const hidl_string& facility,
+-                                       const hidl_string& password, int32_t serviceClass,
+-                                       const hidl_string& appId) override;
+-    Return<void> setFacilityLockForApp(int32_t serial, const hidl_string& facility, bool lockState,
+-                                       const hidl_string& password, int32_t serviceClass,
+-                                       const hidl_string& appId) override;
+-    Return<void> setBarringPassword(int32_t serial, const hidl_string& facility,
+-                                    const hidl_string& oldPassword,
+-                                    const hidl_string& newPassword) override;
+-    Return<void> getNetworkSelectionMode(int32_t serial) override;
+-    Return<void> setNetworkSelectionModeAutomatic(int32_t serial) override;
+-    Return<void> setNetworkSelectionModeManual(int32_t serial,
+-                                               const hidl_string& operatorNumeric) override;
+-    Return<void> getAvailableNetworks(int32_t serial) override;
+-    Return<void> startDtmf(int32_t serial, const hidl_string& s) override;
+-    Return<void> stopDtmf(int32_t serial) override;
+-    Return<void> getBasebandVersion(int32_t serial) override;
+-    Return<void> separateConnection(int32_t serial, int32_t gsmIndex) override;
+-    Return<void> setMute(int32_t serial, bool enable) override;
+-    Return<void> getMute(int32_t serial) override;
+-    Return<void> getClip(int32_t serial) override;
+-    Return<void> getDataCallList(int32_t serial) override;
+-    Return<void> setSuppServiceNotifications(int32_t serial, bool enable) override;
+-    Return<void> writeSmsToSim(
+-        int32_t serial, const ::android::hardware::radio::V1_0::SmsWriteArgs& smsWriteArgs) override;
+-    Return<void> deleteSmsOnSim(int32_t serial, int32_t index) override;
+-    Return<void> setBandMode(int32_t serial,
+-                             ::android::hardware::radio::V1_0::RadioBandMode mode) override;
+-    Return<void> getAvailableBandModes(int32_t serial) override;
+-    Return<void> sendEnvelope(int32_t serial, const hidl_string& command) override;
+-    Return<void> sendTerminalResponseToSim(int32_t serial,
+-                                           const hidl_string& commandResponse) override;
+-    Return<void> handleStkCallSetupRequestFromSim(int32_t serial, bool accept) override;
+-    Return<void> explicitCallTransfer(int32_t serial) override;
+-    Return<void> setPreferredNetworkType(
+-        int32_t serial, ::android::hardware::radio::V1_0::PreferredNetworkType nwType) override;
+-    Return<void> getPreferredNetworkType(int32_t serial) override;
+-    Return<void> getNeighboringCids(int32_t serial) override;
+-    Return<void> setLocationUpdates(int32_t serial, bool enable) override;
+-    Return<void> setCdmaSubscriptionSource(
+-        int32_t serial, ::android::hardware::radio::V1_0::CdmaSubscriptionSource cdmaSub) override;
+-    Return<void> setCdmaRoamingPreference(
+-        int32_t serial, ::android::hardware::radio::V1_0::CdmaRoamingType type) override;
+-    Return<void> getCdmaRoamingPreference(int32_t serial) override;
+-    Return<void> setTTYMode(int32_t serial, ::android::hardware::radio::V1_0::TtyMode mode) override;
+-    Return<void> getTTYMode(int32_t serial) override;
+-    Return<void> setPreferredVoicePrivacy(int32_t serial, bool enable) override;
+-    Return<void> getPreferredVoicePrivacy(int32_t serial) override;
+-    Return<void> sendCDMAFeatureCode(int32_t serial, const hidl_string& featureCode) override;
+-    Return<void> sendBurstDtmf(int32_t serial, const hidl_string& dtmf, int32_t on,
+-                               int32_t off) override;
+-    Return<void> sendCdmaSms(int32_t serial,
+-                             const ::android::hardware::radio::V1_0::CdmaSmsMessage& sms) override;
+-    Return<void> acknowledgeLastIncomingCdmaSms(
+-        int32_t serial, const ::android::hardware::radio::V1_0::CdmaSmsAck& smsAck) override;
+-    Return<void> getGsmBroadcastConfig(int32_t serial) override;
+-    Return<void> setGsmBroadcastConfig(
+-        int32_t serial,
+-        const hidl_vec<::android::hardware::radio::V1_0::GsmBroadcastSmsConfigInfo>& configInfo)
+-        override;
+-    Return<void> setGsmBroadcastActivation(int32_t serial, bool activate) override;
+-    Return<void> getCdmaBroadcastConfig(int32_t serial) override;
+-    Return<void> setCdmaBroadcastConfig(
+-        int32_t serial,
+-        const hidl_vec<::android::hardware::radio::V1_0::CdmaBroadcastSmsConfigInfo>& configInfo)
+-        override;
+-    Return<void> setCdmaBroadcastActivation(int32_t serial, bool activate) override;
+-    Return<void> getCDMASubscription(int32_t serial) override;
+-    Return<void> writeSmsToRuim(
+-        int32_t serial, const ::android::hardware::radio::V1_0::CdmaSmsWriteArgs& cdmaSms) override;
+-    Return<void> deleteSmsOnRuim(int32_t serial, int32_t index) override;
+-    Return<void> getDeviceIdentity(int32_t serial) override;
+-    Return<void> exitEmergencyCallbackMode(int32_t serial) override;
+-    Return<void> getSmscAddress(int32_t serial) override;
+-    Return<void> setSmscAddress(int32_t serial, const hidl_string& smsc) override;
+-    Return<void> reportSmsMemoryStatus(int32_t serial, bool available) override;
+-    Return<void> reportStkServiceIsRunning(int32_t serial) override;
+-    Return<void> getCdmaSubscriptionSource(int32_t serial) override;
+-    Return<void> requestIsimAuthentication(int32_t serial, const hidl_string& challenge) override;
+-    Return<void> acknowledgeIncomingGsmSmsWithPdu(int32_t serial, bool success,
+-                                                  const hidl_string& ackPdu) override;
+-    Return<void> sendEnvelopeWithStatus(int32_t serial, const hidl_string& contents) override;
+-    Return<void> getVoiceRadioTechnology(int32_t serial) override;
+-    Return<void> getCellInfoList(int32_t serial) override;
+-    Return<void> setCellInfoListRate(int32_t serial, int32_t rate) override;
+-    Return<void> setInitialAttachApn(
+-        int32_t serial, const ::android::hardware::radio::V1_0::DataProfileInfo& dataProfileInfo,
+-        bool modemCognitive, bool isRoaming) override;
+-    Return<void> getImsRegistrationState(int32_t serial) override;
+-    Return<void> sendImsSms(int32_t serial,
+-                            const ::android::hardware::radio::V1_0::ImsSmsMessage& message) override;
+-    Return<void> iccTransmitApduBasicChannel(
+-        int32_t serial, const ::android::hardware::radio::V1_0::SimApdu& message) override;
+-    Return<void> iccOpenLogicalChannel(int32_t serial, const hidl_string& aid, int32_t p2) override;
+-    Return<void> iccCloseLogicalChannel(int32_t serial, int32_t channelId) override;
+-    Return<void> iccTransmitApduLogicalChannel(
+-        int32_t serial, const ::android::hardware::radio::V1_0::SimApdu& message) override;
+-    Return<void> nvReadItem(int32_t serial,
+-                            ::android::hardware::radio::V1_0::NvItem itemId) override;
+-    Return<void> nvWriteItem(int32_t serial,
+-                             const ::android::hardware::radio::V1_0::NvWriteItem& item) override;
+-    Return<void> nvWriteCdmaPrl(int32_t serial, const hidl_vec<uint8_t>& prl) override;
+-    Return<void> nvResetConfig(int32_t serial,
+-                               ::android::hardware::radio::V1_0::ResetNvType resetType) override;
+-    Return<void> setUiccSubscription(
+-        int32_t serial, const ::android::hardware::radio::V1_0::SelectUiccSub& uiccSub) override;
+-    Return<void> setDataAllowed(int32_t serial, bool allow) override;
+-    Return<void> getHardwareConfig(int32_t serial) override;
+-    Return<void> requestIccSimAuthentication(int32_t serial, int32_t authContext,
+-                                             const hidl_string& authData,
+-                                             const hidl_string& aid) override;
+-    Return<void> setDataProfile(
+-        int32_t serial, const hidl_vec<::android::hardware::radio::V1_0::DataProfileInfo>& profiles,
+-        bool isRoaming) override;
+-    Return<void> requestShutdown(int32_t serial) override;
+-    Return<void> getRadioCapability(int32_t serial) override;
+-    Return<void> setRadioCapability(
+-        int32_t serial, const ::android::hardware::radio::V1_0::RadioCapability& rc) override;
+-    Return<void> startLceService(int32_t serial, int32_t reportInterval, bool pullMode) override;
+-    Return<void> stopLceService(int32_t serial) override;
+-    Return<void> pullLceData(int32_t serial) override;
+-    Return<void> getModemActivityInfo(int32_t serial) override;
+-    Return<void> setAllowedCarriers(
+-        int32_t serial, bool allAllowed,
+-        const ::android::hardware::radio::V1_0::CarrierRestrictions& carriers) override;
+-    Return<void> getAllowedCarriers(int32_t serial) override;
+-    Return<void> sendDeviceState(int32_t serial,
+-                                 ::android::hardware::radio::V1_0::DeviceStateType deviceStateType,
+-                                 bool state) override;
+-    Return<void> setIndicationFilter(
+-        int32_t serial,
+-        hidl_bitfield<::android::hardware::radio::V1_2::IndicationFilter> indicationFilter) override;
+-    Return<void> setSimCardPower(int32_t serial, bool powerUp) override;
+-    Return<void> responseAcknowledgement() override;
+-
+-    // Methods from ::android::hardware::radio::V1_1::IRadio follow.
+-    Return<void> setCarrierInfoForImsiEncryption(
+-        int32_t serial,
+-        const ::android::hardware::radio::V1_1::ImsiEncryptionInfo& imsiEncryptionInfo) override;
+-    Return<void> setSimCardPower_1_1(
+-        int32_t serial, ::android::hardware::radio::V1_1::CardPowerState powerUp) override;
+-    Return<void> startNetworkScan(
+-        int32_t serial,
+-        const ::android::hardware::radio::V1_1::NetworkScanRequest& request) override;
+-    Return<void> stopNetworkScan(int32_t serial) override;
+-    Return<void> startKeepalive(
+-        int32_t serial,
+-        const ::android::hardware::radio::V1_1::KeepaliveRequest& keepalive) override;
+-    Return<void> stopKeepalive(int32_t serial, int32_t sessionHandle) override;
+-
+-    // Methods from ::android::hardware::radio::V1_2::IRadio follow.
+-    Return<void> startNetworkScan_1_2(
+-        int32_t serial,
+-        const ::android::hardware::radio::V1_2::NetworkScanRequest& request) override;
+-    Return<void> setIndicationFilter_1_2(
+-        int32_t serial,
+-        hidl_bitfield<::android::hardware::radio::V1_2::IndicationFilter> indicationFilter) override;
+-    Return<void> setSignalStrengthReportingCriteria(
+-        int32_t serial, int32_t hysteresisMs, int32_t hysteresisDb,
+-        const hidl_vec<int32_t>& thresholdsDbm,
+-        ::android::hardware::radio::V1_2::AccessNetwork accessNetwork) override;
+-    Return<void> setLinkCapacityReportingCriteria(
+-        int32_t serial, int32_t hysteresisMs, int32_t hysteresisDlKbps, int32_t hysteresisUlKbps,
+-        const hidl_vec<int32_t>& thresholdsDownlinkKbps,
+-        const hidl_vec<int32_t>& thresholdsUplinkKbps,
+-        ::android::hardware::radio::V1_2::AccessNetwork accessNetwork) override;
+-    Return<void> setupDataCall_1_2(
+-        int32_t serial, ::android::hardware::radio::V1_2::AccessNetwork accessNetwork,
+-        const ::android::hardware::radio::V1_0::DataProfileInfo& dataProfileInfo,
+-        bool modemCognitive, bool roamingAllowed, bool isRoaming,
+-        ::android::hardware::radio::V1_2::DataRequestReason reason,
+-        const hidl_vec<hidl_string>& addresses, const hidl_vec<hidl_string>& dnses) override;
+-    Return<void> deactivateDataCall_1_2(
+-        int32_t serial, int32_t cid,
+-        ::android::hardware::radio::V1_2::DataRequestReason reason) override;
+-
+-    // Methods from ::android::hardware::radio::V1_3::IRadio follow.
+-    Return<void> setSystemSelectionChannels(
+-        int32_t serial, bool specifyChannels,
+-        const hidl_vec<::android::hardware::radio::V1_1::RadioAccessSpecifier>& specifiers) override;
+-    Return<void> enableModem(int32_t serial, bool on) override;
+-    Return<void> getModemStackStatus(int32_t serial) override;
+-};
+-
+-}  // namespace implementation
+-}  // namespace V1_3
+-}  // namespace radio
+-}  // namespace hardware
+-}  // namespace android
+diff --git a/hidl/radio/1.3/SecRadioIndication.cpp b/hidl/radio/1.3/SecRadioIndication.cpp
+deleted file mode 100644
+index 326d127..0000000
+--- a/hidl/radio/1.3/SecRadioIndication.cpp
++++ /dev/null
+@@ -1,513 +0,0 @@
+-/*
+- * Copyright (C) 2019, The LineageOS Project
+- *
+- * Licensed under the Apache License, Version 2.1 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.1
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#include "SecRadioIndication.h"
+-
+-namespace vendor {
+-namespace samsung {
+-namespace hardware {
+-namespace radio {
+-namespace V1_2 {
+-namespace implementation {
+-
+-SecRadioIndication::SecRadioIndication(
+-    const sp<::android::hardware::radio::V1_2::IRadioIndication>& radioIndication)
+-    : radioIndication(radioIndication) {}
+-
+-// Methods from ::android::hardware::radio::V1_0::IRadioIndication follow.
+-Return<void> SecRadioIndication::radioStateChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    ::android::hardware::radio::V1_0::RadioState radioState) {
+-    radioIndication->radioStateChanged(type, radioState);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::callStateChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->callStateChanged(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::networkStateChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->networkStateChanged(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::newSms(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                        const hidl_vec<uint8_t>& pdu) {
+-    radioIndication->newSms(type, pdu);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::newSmsStatusReport(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, const hidl_vec<uint8_t>& pdu) {
+-    radioIndication->newSmsStatusReport(type, pdu);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::newSmsOnSim(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, int32_t recordNumber) {
+-    radioIndication->newSmsOnSim(type, recordNumber);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::onUssd(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                        ::android::hardware::radio::V1_0::UssdModeType modeType,
+-                                        const hidl_string& msg) {
+-    radioIndication->onUssd(type, modeType, msg);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::nitzTimeReceived(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, const hidl_string& nitzTime,
+-    uint64_t receivedTime) {
+-    radioIndication->nitzTimeReceived(type, nitzTime, receivedTime);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::currentSignalStrength(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::SignalStrength& signalStrength) {
+-    radioIndication->currentSignalStrength(type, signalStrength);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::dataCallListChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const hidl_vec<::android::hardware::radio::V1_0::SetupDataCallResult>& dcList) {
+-    radioIndication->dataCallListChanged(type, dcList);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::suppSvcNotify(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::SuppSvcNotification& suppSvc) {
+-    radioIndication->suppSvcNotify(type, suppSvc);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::stkSessionEnd(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->stkSessionEnd(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::stkProactiveCommand(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, const hidl_string& cmd) {
+-    radioIndication->stkProactiveCommand(type, cmd);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::stkEventNotify(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, const hidl_string& cmd) {
+-    radioIndication->stkEventNotify(type, cmd);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::stkCallSetup(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, int64_t timeout) {
+-    radioIndication->stkCallSetup(type, timeout);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::simSmsStorageFull(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->simSmsStorageFull(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::simRefresh(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::SimRefreshResult& refreshResult) {
+-    radioIndication->simRefresh(type, refreshResult);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::callRing(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, bool isGsm,
+-    const ::android::hardware::radio::V1_0::CdmaSignalInfoRecord& record) {
+-    radioIndication->callRing(type, isGsm, record);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::simStatusChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->simStatusChanged(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cdmaNewSms(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::CdmaSmsMessage& msg) {
+-    radioIndication->cdmaNewSms(type, msg);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::newBroadcastSms(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, const hidl_vec<uint8_t>& data) {
+-    radioIndication->newBroadcastSms(type, data);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cdmaRuimSmsStorageFull(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->cdmaRuimSmsStorageFull(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::restrictedStateChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    ::android::hardware::radio::V1_0::PhoneRestrictedState state) {
+-    radioIndication->restrictedStateChanged(type, state);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::enterEmergencyCallbackMode(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->enterEmergencyCallbackMode(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cdmaCallWaiting(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::CdmaCallWaiting& callWaitingRecord) {
+-    radioIndication->cdmaCallWaiting(type, callWaitingRecord);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cdmaOtaProvisionStatus(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    ::android::hardware::radio::V1_0::CdmaOtaProvisionStatus status) {
+-    radioIndication->cdmaOtaProvisionStatus(type, status);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cdmaInfoRec(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::CdmaInformationRecords& records) {
+-    radioIndication->cdmaInfoRec(type, records);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::indicateRingbackTone(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, bool start) {
+-    radioIndication->indicateRingbackTone(type, start);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::resendIncallMute(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->resendIncallMute(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cdmaSubscriptionSourceChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    ::android::hardware::radio::V1_0::CdmaSubscriptionSource cdmaSource) {
+-    radioIndication->cdmaSubscriptionSourceChanged(type, cdmaSource);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cdmaPrlChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, int32_t version) {
+-    radioIndication->cdmaPrlChanged(type, version);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::exitEmergencyCallbackMode(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->exitEmergencyCallbackMode(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::rilConnected(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->rilConnected(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::voiceRadioTechChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    ::android::hardware::radio::V1_0::RadioTechnology rat) {
+-    radioIndication->voiceRadioTechChanged(type, rat);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cellInfoList(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const hidl_vec<::android::hardware::radio::V1_0::CellInfo>& records) {
+-    radioIndication->cellInfoList(type, records);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::imsNetworkStateChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type) {
+-    radioIndication->imsNetworkStateChanged(type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::subscriptionStatusChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, bool activate) {
+-    radioIndication->subscriptionStatusChanged(type, activate);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::srvccStateNotify(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    ::android::hardware::radio::V1_0::SrvccState state) {
+-    radioIndication->srvccStateNotify(type, state);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::hardwareConfigChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const hidl_vec<::android::hardware::radio::V1_0::HardwareConfig>& configs) {
+-    radioIndication->hardwareConfigChanged(type, configs);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::radioCapabilityIndication(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::RadioCapability& rc) {
+-    radioIndication->radioCapabilityIndication(type, rc);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::onSupplementaryServiceIndication(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_0::StkCcUnsolSsResult& ss) {
+-    radioIndication->onSupplementaryServiceIndication(type, ss);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::stkCallControlAlphaNotify(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, const hidl_string& alpha) {
+-    radioIndication->stkCallControlAlphaNotify(type, alpha);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::lceData(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                         const ::android::hardware::radio::V1_0::LceDataInfo& lce) {
+-    radioIndication->lceData(type, lce);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::pcoData(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                         const ::android::hardware::radio::V1_0::PcoDataInfo& pco) {
+-    radioIndication->pcoData(type, pco);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::modemReset(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type, const hidl_string& reason) {
+-    radioIndication->modemReset(type, reason);
+-    return Void();
+-}
+-
+-// Methods from ::android::hardware::radio::V1_1::IRadioIndication follow.
+-Return<void> SecRadioIndication::carrierInfoForImsiEncryption(
+-    ::android::hardware::radio::V1_0::RadioIndicationType info) {
+-    radioIndication->carrierInfoForImsiEncryption(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::networkScanResult(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_1::NetworkScanResult& result) {
+-    radioIndication->networkScanResult(type, result);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::keepaliveStatus(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_1::KeepaliveStatus& status) {
+-    radioIndication->keepaliveStatus(type, status);
+-    return Void();
+-}
+-
+-// Methods from ::android::hardware::radio::V1_2::IRadioIndication follow.
+-Return<void> SecRadioIndication::networkScanResult_1_2(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_2::NetworkScanResult& result) {
+-    radioIndication->networkScanResult_1_2(type, result);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::cellInfoList_1_2(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const hidl_vec<::android::hardware::radio::V1_2::CellInfo>& records) {
+-    radioIndication->cellInfoList_1_2(type, records);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::currentLinkCapacityEstimate(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_2::LinkCapacityEstimate& lce) {
+-    radioIndication->currentLinkCapacityEstimate(type, lce);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::currentPhysicalChannelConfigs(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const hidl_vec<::android::hardware::radio::V1_2::PhysicalChannelConfig>& configs) {
+-    radioIndication->currentPhysicalChannelConfigs(type, configs);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::currentSignalStrength_1_2(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::android::hardware::radio::V1_2::SignalStrength& signalStrength) {
+-    radioIndication->currentSignalStrength_1_2(type, signalStrength);
+-    return Void();
+-}
+-
+-// Methods from ::vendor::samsung::hardware::radio::V1_2::IRadioIndication follow.
+-Return<void> SecRadioIndication::secCurrentSignalStrength(
+-    ::android::hardware::radio::V1_0::RadioIndicationType type,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecSignalStrength& signalStrength) {
+-    ::android::hardware::radio::V1_2::SignalStrength newSignalStrength = signalStrength.base;
+-    if (signalStrength.base.lte.signalStrength == 99) {
+-        // Set lte signal to invalid
+-        newSignalStrength.lte.timingAdvance = std::numeric_limits<int>::max();
+-    }
+-    radioIndication->currentSignalStrength_1_2(type, newSignalStrength);
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::secImsNetworkStateChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemAcbInfoChanged(
+-    ::android::hardware::radio::V1_0::RadioIndicationType, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemCsFallback(::android::hardware::radio::V1_0::RadioIndicationType,
+-                                               int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemImsPreferenceChangeInd(
+-    ::android::hardware::radio::V1_0::RadioIndicationType, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemVoiceRadioBearerHoStatusInd(
+-    ::android::hardware::radio::V1_0::RadioIndicationType, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemHysteresisDcnInd(
+-    ::android::hardware::radio::V1_0::RadioIndicationType) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemTimerStatusChangedInd(int32_t, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemModemCapInd(int32_t, const hidl_vec<int8_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemAmInd(int32_t, const hidl_string&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemTrunRadioOnInd(int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemSimPbReadyInd(int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemPbInitCompleteInd(int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemDeviceReadyNoti(int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemStkSmsSendResultInd(int32_t, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemStkCallControlResultInd(int32_t, const hidl_string&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemSimSwapStateChangedInd(int32_t, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemSimCountMismatchedInd(int32_t, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemSimIccidNoti(int32_t, const hidl_string&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemSimOnOffNoti(int32_t, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemReleaseCompleteMessageInd(
+-    int32_t, const ::vendor::samsung::hardware::radio::V1_2::OemSSReleaseComplete&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemSapNoti(int32_t, const hidl_vec<int8_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemNrBearerAllocationChangeInd(int32_t, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oem5gStatusChangeInd(int32_t, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemNrDcParamChangeInd(
+-    int32_t, const ::vendor::samsung::hardware::radio::V1_2::DcParam&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemNrSignalStrengthInd(
+-    int32_t, const ::vendor::samsung::hardware::radio::V1_2::NrSignalStrength&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioIndication::oemLoadApnProfile(const hidl_string&, oemLoadApnProfile_cb) {
+-    return Void();
+-}
+-
+-Return<int32_t> SecRadioIndication::oemGetSettingValue(const hidl_string&, const hidl_string&) {
+-    return int32_t{};
+-}
+-
+-}  // namespace implementation
+-}  // namespace V1_2
+-}  // namespace radio
+-}  // namespace hardware
+-}  // namespace samsung
+-}  // namespace vendor
+diff --git a/hidl/radio/1.3/SecRadioIndication.h b/hidl/radio/1.3/SecRadioIndication.h
+deleted file mode 100644
+index b4adbac..0000000
+--- a/hidl/radio/1.3/SecRadioIndication.h
++++ /dev/null
+@@ -1,226 +0,0 @@
+-/*
+- * Copyright (C) 2019, The LineageOS Project
+- *
+- * Licensed under the Apache License, Version 2.1 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.1
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#pragma once
+-
+-#include <hidl/MQDescriptor.h>
+-#include <hidl/Status.h>
+-#include <vendor/samsung/hardware/radio/1.2/IRadioIndication.h>
+-
+-namespace vendor {
+-namespace samsung {
+-namespace hardware {
+-namespace radio {
+-namespace V1_2 {
+-namespace implementation {
+-
+-using ::android::sp;
+-using ::android::hardware::hidl_array;
+-using ::android::hardware::hidl_memory;
+-using ::android::hardware::hidl_string;
+-using ::android::hardware::hidl_vec;
+-using ::android::hardware::Return;
+-using ::android::hardware::Void;
+-
+-struct SecRadioIndication : public IRadioIndication {
+-    sp<::android::hardware::radio::V1_2::IRadioIndication> radioIndication;
+-
+-    SecRadioIndication(const sp<::android::hardware::radio::V1_2::IRadioIndication>& radioIndication);
+-
+-    // Methods from ::android::hardware::radio::V1_0::IRadioIndication follow.
+-    Return<void> radioStateChanged(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                   ::android::hardware::radio::V1_0::RadioState radioState) override;
+-    Return<void> callStateChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> networkStateChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> newSms(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                        const hidl_vec<uint8_t>& pdu) override;
+-    Return<void> newSmsStatusReport(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                    const hidl_vec<uint8_t>& pdu) override;
+-    Return<void> newSmsOnSim(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                             int32_t recordNumber) override;
+-    Return<void> onUssd(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                        ::android::hardware::radio::V1_0::UssdModeType modeType,
+-                        const hidl_string& msg) override;
+-    Return<void> nitzTimeReceived(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                  const hidl_string& nitzTime, uint64_t receivedTime) override;
+-    Return<void> currentSignalStrength(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_0::SignalStrength& signalStrength) override;
+-    Return<void> dataCallListChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const hidl_vec<::android::hardware::radio::V1_0::SetupDataCallResult>& dcList) override;
+-    Return<void> suppSvcNotify(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_0::SuppSvcNotification& suppSvc) override;
+-    Return<void> stkSessionEnd(::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> stkProactiveCommand(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                     const hidl_string& cmd) override;
+-    Return<void> stkEventNotify(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                const hidl_string& cmd) override;
+-    Return<void> stkCallSetup(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                              int64_t timeout) override;
+-    Return<void> simSmsStorageFull(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> simRefresh(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_0::SimRefreshResult& refreshResult) override;
+-    Return<void> callRing(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type, bool isGsm,
+-        const ::android::hardware::radio::V1_0::CdmaSignalInfoRecord& record) override;
+-    Return<void> simStatusChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> cdmaNewSms(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                            const ::android::hardware::radio::V1_0::CdmaSmsMessage& msg) override;
+-    Return<void> newBroadcastSms(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                 const hidl_vec<uint8_t>& data) override;
+-    Return<void> cdmaRuimSmsStorageFull(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> restrictedStateChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        ::android::hardware::radio::V1_0::PhoneRestrictedState state) override;
+-    Return<void> enterEmergencyCallbackMode(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> cdmaCallWaiting(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_0::CdmaCallWaiting& callWaitingRecord) override;
+-    Return<void> cdmaOtaProvisionStatus(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        ::android::hardware::radio::V1_0::CdmaOtaProvisionStatus status) override;
+-    Return<void> cdmaInfoRec(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_0::CdmaInformationRecords& records) override;
+-    Return<void> indicateRingbackTone(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                      bool start) override;
+-    Return<void> resendIncallMute(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> cdmaSubscriptionSourceChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        ::android::hardware::radio::V1_0::CdmaSubscriptionSource cdmaSource) override;
+-    Return<void> cdmaPrlChanged(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                int32_t version) override;
+-    Return<void> exitEmergencyCallbackMode(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> rilConnected(::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> voiceRadioTechChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        ::android::hardware::radio::V1_0::RadioTechnology rat) override;
+-    Return<void> cellInfoList(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const hidl_vec<::android::hardware::radio::V1_0::CellInfo>& records) override;
+-    Return<void> imsNetworkStateChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> subscriptionStatusChanged(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                           bool activate) override;
+-    Return<void> srvccStateNotify(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                  ::android::hardware::radio::V1_0::SrvccState state) override;
+-    Return<void> hardwareConfigChanged(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const hidl_vec<::android::hardware::radio::V1_0::HardwareConfig>& configs) override;
+-    Return<void> radioCapabilityIndication(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_0::RadioCapability& rc) override;
+-    Return<void> onSupplementaryServiceIndication(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_0::StkCcUnsolSsResult& ss) override;
+-    Return<void> stkCallControlAlphaNotify(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                           const hidl_string& alpha) override;
+-    Return<void> lceData(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                         const ::android::hardware::radio::V1_0::LceDataInfo& lce) override;
+-    Return<void> pcoData(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                         const ::android::hardware::radio::V1_0::PcoDataInfo& pco) override;
+-    Return<void> modemReset(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                            const hidl_string& reason) override;
+-
+-    // Methods from ::android::hardware::radio::V1_1::IRadioIndication follow.
+-    Return<void> carrierInfoForImsiEncryption(
+-        ::android::hardware::radio::V1_0::RadioIndicationType info) override;
+-    Return<void> networkScanResult(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_1::NetworkScanResult& result) override;
+-    Return<void> keepaliveStatus(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_1::KeepaliveStatus& status) override;
+-
+-    // Methods from ::android::hardware::radio::V1_2::IRadioIndication follow.
+-    Return<void> networkScanResult_1_2(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_2::NetworkScanResult& result) override;
+-    Return<void> cellInfoList_1_2(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const hidl_vec<::android::hardware::radio::V1_2::CellInfo>& records) override;
+-    Return<void> currentLinkCapacityEstimate(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_2::LinkCapacityEstimate& lce) override;
+-    Return<void> currentPhysicalChannelConfigs(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const hidl_vec<::android::hardware::radio::V1_2::PhysicalChannelConfig>& configs) override;
+-    Return<void> currentSignalStrength_1_2(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::android::hardware::radio::V1_2::SignalStrength& signalStrength) override;
+-
+-    // Methods from ::vendor::samsung::hardware::radio::V1_2::IRadioIndication follow.
+-    Return<void> secCurrentSignalStrength(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecSignalStrength& signalStrength) override;
+-    Return<void> secImsNetworkStateChanged(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                           const hidl_vec<int32_t>& regState) override;
+-    Return<void> oemAcbInfoChanged(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                   const hidl_vec<int32_t>& acbInfo) override;
+-    Return<void> oemCsFallback(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                               int32_t state) override;
+-    Return<void> oemImsPreferenceChangeInd(::android::hardware::radio::V1_0::RadioIndicationType type,
+-                                           const hidl_vec<int32_t>& imsPref) override;
+-    Return<void> oemVoiceRadioBearerHoStatusInd(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type, int32_t state) override;
+-    Return<void> oemHysteresisDcnInd(
+-        ::android::hardware::radio::V1_0::RadioIndicationType type) override;
+-    Return<void> oemTimerStatusChangedInd(int32_t type, const hidl_vec<int32_t>& eventNoti) override;
+-    Return<void> oemModemCapInd(int32_t type, const hidl_vec<int8_t>& data) override;
+-    Return<void> oemAmInd(int32_t type, const hidl_string& intent) override;
+-    Return<void> oemTrunRadioOnInd(int32_t type) override;
+-    Return<void> oemSimPbReadyInd(int32_t type) override;
+-    Return<void> oemPbInitCompleteInd(int32_t type) override;
+-    Return<void> oemDeviceReadyNoti(int32_t type) override;
+-    Return<void> oemStkSmsSendResultInd(int32_t type, int32_t result) override;
+-    Return<void> oemStkCallControlResultInd(int32_t type, const hidl_string& cmd) override;
+-    Return<void> oemSimSwapStateChangedInd(int32_t type, int32_t state) override;
+-    Return<void> oemSimCountMismatchedInd(int32_t type, int32_t state) override;
+-    Return<void> oemSimIccidNoti(int32_t type, const hidl_string& iccid) override;
+-    Return<void> oemSimOnOffNoti(int32_t type, int32_t mode) override;
+-    Return<void> oemReleaseCompleteMessageInd(
+-        int32_t typer,
+-        const ::vendor::samsung::hardware::radio::V1_2::OemSSReleaseComplete& result) override;
+-    Return<void> oemSapNoti(int32_t type, const hidl_vec<int8_t>& data) override;
+-    Return<void> oemNrBearerAllocationChangeInd(int32_t type, int32_t status) override;
+-    Return<void> oem5gStatusChangeInd(int32_t type, int32_t status) override;
+-    Return<void> oemNrDcParamChangeInd(
+-        int32_t type, const ::vendor::samsung::hardware::radio::V1_2::DcParam& dcParam) override;
+-    Return<void> oemNrSignalStrengthInd(
+-        int32_t type,
+-        const ::vendor::samsung::hardware::radio::V1_2::NrSignalStrength& nrSignalStrength) override;
+-    Return<void> oemLoadApnProfile(const hidl_string& select,
+-                                   oemLoadApnProfile_cb _hidl_cb) override;
+-    Return<int32_t> oemGetSettingValue(const hidl_string& key, const hidl_string& table) override;
+-};
+-
+-}  // namespace implementation
+-}  // namespace V1_2
+-}  // namespace radio
+-}  // namespace hardware
+-}  // namespace samsung
+-}  // namespace vendor
+diff --git a/hidl/radio/1.3/SecRadioResponse.cpp b/hidl/radio/1.3/SecRadioResponse.cpp
+deleted file mode 100644
+index 0641174..0000000
+--- a/hidl/radio/1.3/SecRadioResponse.cpp
++++ /dev/null
+@@ -1,1273 +0,0 @@
+-/*
+- * Copyright (C) 2019, The LineageOS Project
+- *
+- * Licensed under the Apache License, Version 2.1 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.1
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#include "SecRadioResponse.h"
+-
+-namespace vendor {
+-namespace samsung {
+-namespace hardware {
+-namespace radio {
+-namespace V1_2 {
+-namespace implementation {
+-
+-SecRadioResponse::SecRadioResponse(
+-    int simSlot, const sp<::android::hardware::radio::V1_2::IRadioResponse>& radioResponse)
+-    : simSlot(simSlot), radioResponse(radioResponse) {}
+-
+-// Methods from ::android::hardware::radio::V1_0::IRadioResponse follow.
+-Return<void> SecRadioResponse::getIccCardStatusResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::CardStatus& cardStatus) {
+-    radioResponse->getIccCardStatusResponse(info, cardStatus);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::supplyIccPinForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t remainingRetries) {
+-    radioResponse->supplyIccPinForAppResponse(info, remainingRetries);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::supplyIccPukForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t remainingRetries) {
+-    radioResponse->supplyIccPukForAppResponse(info, remainingRetries);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::supplyIccPin2ForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t remainingRetries) {
+-    radioResponse->supplyIccPin2ForAppResponse(info, remainingRetries);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::supplyIccPuk2ForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t remainingRetries) {
+-    radioResponse->supplyIccPuk2ForAppResponse(info, remainingRetries);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::changeIccPinForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t remainingRetries) {
+-    radioResponse->changeIccPinForAppResponse(info, remainingRetries);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::changeIccPin2ForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t remainingRetries) {
+-    radioResponse->changeIccPin2ForAppResponse(info, remainingRetries);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::supplyNetworkDepersonalizationResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t remainingRetries) {
+-    radioResponse->supplyNetworkDepersonalizationResponse(info, remainingRetries);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCurrentCallsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::Call>& calls) {
+-    radioResponse->getCurrentCallsResponse(info, calls);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::dialResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->dialResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getIMSIForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& imsi) {
+-    radioResponse->getIMSIForAppResponse(info, imsi);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::hangupConnectionResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->hangupConnectionResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::hangupWaitingOrBackgroundResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->hangupWaitingOrBackgroundResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::hangupForegroundResumeBackgroundResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->hangupForegroundResumeBackgroundResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::switchWaitingOrHoldingAndActiveResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->switchWaitingOrHoldingAndActiveResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::conferenceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->conferenceResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::rejectCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->rejectCallResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getLastCallFailCauseResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::LastCallFailCauseInfo& failCauseinfo) {
+-    radioResponse->getLastCallFailCauseResponse(info, failCauseinfo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getSignalStrengthResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::SignalStrength& sigStrength) {
+-    radioResponse->getSignalStrengthResponse(info, sigStrength);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getVoiceRegistrationStateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::VoiceRegStateResult& voiceRegResponse) {
+-    radioResponse->getVoiceRegistrationStateResponse(info, voiceRegResponse);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getDataRegistrationStateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::DataRegStateResult& dataRegResponse) {
+-    radioResponse->getDataRegistrationStateResponse(info, dataRegResponse);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getOperatorResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& longName,
+-    const hidl_string& shortName, const hidl_string& numeric) {
+-    radioResponse->getOperatorResponse(info, longName, shortName, numeric);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setRadioPowerResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setRadioPowerResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendDtmfResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->sendDtmfResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::SendSmsResult& sms) {
+-    radioResponse->sendSmsResponse(info, sms);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendSMSExpectMoreResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::SendSmsResult& sms) {
+-    radioResponse->sendSMSExpectMoreResponse(info, sms);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setupDataCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::SetupDataCallResult& dcResponse) {
+-    radioResponse->setupDataCallResponse(info, dcResponse);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::iccIOForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::IccIoResult& iccIo) {
+-    radioResponse->iccIOForAppResponse(info, iccIo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendUssdResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->sendUssdResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::cancelPendingUssdResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->cancelPendingUssdResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getClirResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t n, int32_t m) {
+-    radioResponse->getClirResponse(info, n, m);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setClirResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setClirResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCallForwardStatusResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::CallForwardInfo>& callForwardInfos) {
+-    radioResponse->getCallForwardStatusResponse(info, callForwardInfos);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setCallForwardResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCallForwardResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCallWaitingResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool enable,
+-    int32_t serviceClass) {
+-    radioResponse->getCallWaitingResponse(info, enable, serviceClass);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setCallWaitingResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCallWaitingResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::acknowledgeLastIncomingGsmSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->acknowledgeLastIncomingGsmSmsResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::acceptCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->acceptCallResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::deactivateDataCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->deactivateDataCallResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getFacilityLockForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t response) {
+-    radioResponse->getFacilityLockForAppResponse(info, response);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setFacilityLockForAppResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t retry) {
+-    radioResponse->setFacilityLockForAppResponse(info, retry);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setBarringPasswordResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setBarringPasswordResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getNetworkSelectionModeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool manual) {
+-    radioResponse->getNetworkSelectionModeResponse(info, manual);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setNetworkSelectionModeAutomaticResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setNetworkSelectionModeAutomaticResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setNetworkSelectionModeManualResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setNetworkSelectionModeManualResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getAvailableNetworksResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::OperatorInfo>& networkInfos) {
+-    radioResponse->getAvailableNetworksResponse(info, networkInfos);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::startDtmfResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->startDtmfResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::stopDtmfResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->stopDtmfResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getBasebandVersionResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& version) {
+-    radioResponse->getBasebandVersionResponse(info, version);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::separateConnectionResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->separateConnectionResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setMuteResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setMuteResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getMuteResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool enable) {
+-    radioResponse->getMuteResponse(info, enable);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getClipResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    ::android::hardware::radio::V1_0::ClipStatus status) {
+-    radioResponse->getClipResponse(info, status);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getDataCallListResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::SetupDataCallResult>& dcResponse) {
+-    radioResponse->getDataCallListResponse(info, dcResponse);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setSuppServiceNotificationsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setSuppServiceNotificationsResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::writeSmsToSimResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t index) {
+-    radioResponse->writeSmsToSimResponse(info, index);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::deleteSmsOnSimResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->deleteSmsOnSimResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setBandModeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setBandModeResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getAvailableBandModesResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::RadioBandMode>& bandModes) {
+-    radioResponse->getAvailableBandModesResponse(info, bandModes);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendEnvelopeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_string& commandResponse) {
+-    radioResponse->sendEnvelopeResponse(info, commandResponse);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendTerminalResponseToSimResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->sendTerminalResponseToSimResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::handleStkCallSetupRequestFromSimResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->handleStkCallSetupRequestFromSimResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::explicitCallTransferResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->explicitCallTransferResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setPreferredNetworkTypeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setPreferredNetworkTypeResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getPreferredNetworkTypeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    ::android::hardware::radio::V1_0::PreferredNetworkType nwType) {
+-    radioResponse->getPreferredNetworkTypeResponse(info, nwType);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getNeighboringCidsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::NeighboringCell>& cells) {
+-    radioResponse->getNeighboringCidsResponse(info, cells);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setLocationUpdatesResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setLocationUpdatesResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setCdmaSubscriptionSourceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCdmaSubscriptionSourceResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setCdmaRoamingPreferenceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCdmaRoamingPreferenceResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCdmaRoamingPreferenceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    ::android::hardware::radio::V1_0::CdmaRoamingType type) {
+-    radioResponse->getCdmaRoamingPreferenceResponse(info, type);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setTTYModeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setTTYModeResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getTTYModeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    ::android::hardware::radio::V1_0::TtyMode mode) {
+-    radioResponse->getTTYModeResponse(info, mode);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setPreferredVoicePrivacyResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setPreferredVoicePrivacyResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getPreferredVoicePrivacyResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool enable) {
+-    radioResponse->getPreferredVoicePrivacyResponse(info, enable);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendCDMAFeatureCodeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->sendCDMAFeatureCodeResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendBurstDtmfResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->sendBurstDtmfResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendCdmaSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::SendSmsResult& sms) {
+-    radioResponse->sendCdmaSmsResponse(info, sms);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::acknowledgeLastIncomingCdmaSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->acknowledgeLastIncomingCdmaSmsResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getGsmBroadcastConfigResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::GsmBroadcastSmsConfigInfo>& configs) {
+-    radioResponse->getGsmBroadcastConfigResponse(info, configs);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setGsmBroadcastConfigResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setGsmBroadcastConfigResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setGsmBroadcastActivationResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setGsmBroadcastActivationResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCdmaBroadcastConfigResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::CdmaBroadcastSmsConfigInfo>& configs) {
+-    radioResponse->getCdmaBroadcastConfigResponse(info, configs);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setCdmaBroadcastConfigResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCdmaBroadcastConfigResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setCdmaBroadcastActivationResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCdmaBroadcastActivationResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCDMASubscriptionResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& mdn,
+-    const hidl_string& hSid, const hidl_string& hNid, const hidl_string& min,
+-    const hidl_string& prl) {
+-    radioResponse->getCDMASubscriptionResponse(info, mdn, hSid, hNid, min, prl);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::writeSmsToRuimResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, uint32_t index) {
+-    radioResponse->writeSmsToRuimResponse(info, index);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::deleteSmsOnRuimResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->deleteSmsOnRuimResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getDeviceIdentityResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& imei,
+-    const hidl_string& imeisv, const hidl_string& esn, const hidl_string& meid) {
+-    radioResponse->getDeviceIdentityResponse(info, imei, imeisv, esn, meid);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::exitEmergencyCallbackModeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->exitEmergencyCallbackModeResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getSmscAddressResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& smsc) {
+-    radioResponse->getSmscAddressResponse(info, smsc);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setSmscAddressResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setSmscAddressResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::reportSmsMemoryStatusResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->reportSmsMemoryStatusResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::reportStkServiceIsRunningResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->reportStkServiceIsRunningResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCdmaSubscriptionSourceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    ::android::hardware::radio::V1_0::CdmaSubscriptionSource source) {
+-    radioResponse->getCdmaSubscriptionSourceResponse(info, source);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::requestIsimAuthenticationResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& response) {
+-    radioResponse->requestIsimAuthenticationResponse(info, response);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::acknowledgeIncomingGsmSmsWithPduResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->acknowledgeIncomingGsmSmsWithPduResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendEnvelopeWithStatusResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::IccIoResult& iccIo) {
+-    radioResponse->sendEnvelopeWithStatusResponse(info, iccIo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getVoiceRadioTechnologyResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    ::android::hardware::radio::V1_0::RadioTechnology rat) {
+-    radioResponse->getVoiceRadioTechnologyResponse(info, rat);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCellInfoListResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::CellInfo>& cellInfo) {
+-    radioResponse->getCellInfoListResponse(info, cellInfo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setCellInfoListRateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCellInfoListRateResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setInitialAttachApnResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setInitialAttachApnResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getImsRegistrationStateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool isRegistered,
+-    ::android::hardware::radio::V1_0::RadioTechnologyFamily ratFamily) {
+-    radioResponse->getImsRegistrationStateResponse(info, isRegistered, ratFamily);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendImsSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::SendSmsResult& sms) {
+-    radioResponse->sendImsSmsResponse(info, sms);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::iccTransmitApduBasicChannelResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::IccIoResult& result) {
+-    radioResponse->iccTransmitApduBasicChannelResponse(info, result);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::iccOpenLogicalChannelResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t channelId,
+-    const hidl_vec<int8_t>& selectResponse) {
+-    radioResponse->iccOpenLogicalChannelResponse(info, channelId, selectResponse);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::iccCloseLogicalChannelResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->iccCloseLogicalChannelResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::iccTransmitApduLogicalChannelResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::IccIoResult& result) {
+-    radioResponse->iccTransmitApduLogicalChannelResponse(info, result);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::nvReadItemResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& result) {
+-    radioResponse->nvReadItemResponse(info, result);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::nvWriteItemResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->nvWriteItemResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::nvWriteCdmaPrlResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->nvWriteCdmaPrlResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::nvResetConfigResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->nvResetConfigResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setUiccSubscriptionResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setUiccSubscriptionResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setDataAllowedResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setDataAllowedResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getHardwareConfigResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_0::HardwareConfig>& config) {
+-    radioResponse->getHardwareConfigResponse(info, config);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::requestIccSimAuthenticationResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::IccIoResult& result) {
+-    radioResponse->requestIccSimAuthenticationResponse(info, result);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setDataProfileResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setDataProfileResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::requestShutdownResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->requestShutdownResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getRadioCapabilityResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::RadioCapability& rc) {
+-    radioResponse->getRadioCapabilityResponse(info, rc);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setRadioCapabilityResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::RadioCapability& rc) {
+-    radioResponse->setRadioCapabilityResponse(info, rc);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::startLceServiceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::LceStatusInfo& statusInfo) {
+-    radioResponse->startLceServiceResponse(info, statusInfo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::stopLceServiceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::LceStatusInfo& statusInfo) {
+-    radioResponse->stopLceServiceResponse(info, statusInfo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::pullLceDataResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::LceDataInfo& lceInfo) {
+-    radioResponse->pullLceDataResponse(info, lceInfo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getModemActivityInfoResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_0::ActivityStatsInfo& activityInfo) {
+-    radioResponse->getModemActivityInfoResponse(info, activityInfo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setAllowedCarriersResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t numAllowed) {
+-    radioResponse->setAllowedCarriersResponse(info, numAllowed);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getAllowedCarriersResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool allAllowed,
+-    const ::android::hardware::radio::V1_0::CarrierRestrictions& carriers) {
+-    radioResponse->getAllowedCarriersResponse(info, allAllowed, carriers);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::sendDeviceStateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->sendDeviceStateResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setIndicationFilterResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setIndicationFilterResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setSimCardPowerResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setSimCardPowerResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::acknowledgeRequest(int32_t serial) {
+-    radioResponse->acknowledgeRequest(serial);
+-    return Void();
+-}
+-
+-// Methods from ::android::hardware::radio::V1_1::IRadioResponse follow.
+-Return<void> SecRadioResponse::setCarrierInfoForImsiEncryptionResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setCarrierInfoForImsiEncryptionResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setSimCardPowerResponse_1_1(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setSimCardPowerResponse_1_1(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::startNetworkScanResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->startNetworkScanResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::stopNetworkScanResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->stopNetworkScanResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::startKeepaliveResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_1::KeepaliveStatus& status) {
+-    radioResponse->startKeepaliveResponse(info, status);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::stopKeepaliveResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->stopKeepaliveResponse(info);
+-    return Void();
+-}
+-
+-// Methods from ::android::hardware::radio::V1_2::IRadioResponse follow.
+-Return<void> SecRadioResponse::getCellInfoListResponse_1_2(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_2::CellInfo>& cellInfo) {
+-    radioResponse->getCellInfoListResponse_1_2(info, cellInfo);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getIccCardStatusResponse_1_2(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_2::CardStatus& cardStatus) {
+-    radioResponse->getIccCardStatusResponse_1_2(info, cardStatus);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setSignalStrengthReportingCriteriaResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setSignalStrengthReportingCriteriaResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::setLinkCapacityReportingCriteriaResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info) {
+-    radioResponse->setLinkCapacityReportingCriteriaResponse(info);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getCurrentCallsResponse_1_2(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const hidl_vec<::android::hardware::radio::V1_2::Call>& calls) {
+-    radioResponse->getCurrentCallsResponse_1_2(info, calls);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getSignalStrengthResponse_1_2(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_2::SignalStrength& signalStrength) {
+-    radioResponse->getSignalStrengthResponse_1_2(info, signalStrength);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getVoiceRegistrationStateResponse_1_2(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_2::VoiceRegStateResult& voiceRegResponse) {
+-    radioResponse->getVoiceRegistrationStateResponse_1_2(info, voiceRegResponse);
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::getDataRegistrationStateResponse_1_2(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-    const ::android::hardware::radio::V1_2::DataRegStateResult& dataRegResponse) {
+-    radioResponse->getDataRegistrationStateResponse_1_2(info, dataRegResponse);
+-    return Void();
+-}
+-
+-// Methods from ::vendor::samsung::hardware::radio::V1_2::IRadioResponse follow.
+-Return<void> SecRadioResponse::secGetIccCardStatusReponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecCardStatus&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secSupplyNetworkDepersonalizationResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secAcceptCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secDialResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secGetCurrentCallsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const hidl_vec<::vendor::samsung::hardware::radio::V1_2::SecCall>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secGetSignalStrengthResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecSignalStrength&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secGetVoiceRegistrationStateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecVoiceRegStateResult&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secGetDataRegistrationStateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecDataRegStateResult&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secExplicitCallTransferResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secGetOperatorRespnse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_string&,
+-    const hidl_string&, const hidl_string&, const hidl_string&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetBarringPasswordResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secgetImsRegistrationStateReponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secGetAvailableNetworkResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const hidl_vec<::vendor::samsung::hardware::radio::V1_2::SecOperatorInfo>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemDialEmergencyCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemCallDeflectionResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemModifyCallInitiateResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::android::hardware::radio::V1_0::LastCallFailCauseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetImsCallListResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetPreferredNetworkListResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const hidl_vec<::vendor::samsung::hardware::radio::V1_2::OemPreferredNetworkInfo>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetPreferredNetworkListResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSendEncodedUSSDResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemHoldCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetDisable2gResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetDisable2gResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oenGetAcbInfoResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetTransferCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetICBarringResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_string&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetICBarringResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemQueryCnapResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemRefreshNitzTimeResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemEnableUnsolResponseResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemCancelTransferCallResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemAcknowledgeRilConnectedResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetPhoneBookStorageInfoResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemUsimPbCapaResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetSimPowerResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetSimOnOffResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSetSimInitEventResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetSimLockInfoResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_vec<int32_t>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSupplyIccPersoResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemChangeIccPersoResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetPhoneBookEntryResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::OemSimPBResponse&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemAccessPhoneBookEntryResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetCellBroadcastConfigResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::OemCbConfigArgs&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemEmergencySearchResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemEmergencyControlResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemGetAtrResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, const hidl_string&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSendCdmaSmsExpectMoreResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secSendSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secSendSMSExpectMoreResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secSendCdmaSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secSendImsSmsResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secSetDataAllowedResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secGetCdmaRoamingPreferenceResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secEnable5gResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secDisable5gResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secQuery5gStatusResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secQueryNrDcParamResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::DcParam&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secQueryNrBearerAllocationResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&, int32_t) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::secQueryNrSignalStrengthResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const ::vendor::samsung::hardware::radio::V1_2::NrSignalStrength&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemQueryCsgListResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&,
+-    const hidl_vec<::vendor::samsung::hardware::radio::V1_2::OemCsgInfo>&) {
+-    return Void();
+-}
+-
+-Return<void> SecRadioResponse::oemSelectCsgManualResponse(
+-    const ::android::hardware::radio::V1_0::RadioResponseInfo&) {
+-    return Void();
+-}
+-
+-}  // namespace implementation
+-}  // namespace V1_2
+-}  // namespace radio
+-}  // namespace hardware
+-}  // namespace samsung
+-}  // namespace vendor
+diff --git a/hidl/radio/1.3/SecRadioResponse.h b/hidl/radio/1.3/SecRadioResponse.h
+deleted file mode 100644
+index 52fd2ad..0000000
+--- a/hidl/radio/1.3/SecRadioResponse.h
++++ /dev/null
+@@ -1,563 +0,0 @@
+-/*
+- * Copyright (C) 2019, The LineageOS Project
+- *
+- * Licensed under the Apache License, Version 2.1 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.1
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#pragma once
+-
+-#include <hidl/MQDescriptor.h>
+-#include <hidl/Status.h>
+-#include <vendor/samsung/hardware/radio/1.2/IRadioResponse.h>
+-
+-namespace vendor {
+-namespace samsung {
+-namespace hardware {
+-namespace radio {
+-namespace V1_2 {
+-namespace implementation {
+-
+-using ::android::sp;
+-using ::android::hardware::hidl_array;
+-using ::android::hardware::hidl_memory;
+-using ::android::hardware::hidl_string;
+-using ::android::hardware::hidl_vec;
+-using ::android::hardware::Return;
+-using ::android::hardware::Void;
+-
+-struct SecRadioResponse : public IRadioResponse {
+-    int simSlot;
+-    sp<::android::hardware::radio::V1_2::IRadioResponse> radioResponse;
+-
+-    SecRadioResponse(int simSlot,
+-                     const sp<::android::hardware::radio::V1_2::IRadioResponse>& radioResponse);
+-
+-    // Methods from ::android::hardware::radio::V1_0::IRadioResponse follow.
+-    Return<void> getIccCardStatusResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::CardStatus& cardStatus) override;
+-    Return<void> supplyIccPinForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> supplyIccPukForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> supplyIccPin2ForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> supplyIccPuk2ForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> changeIccPinForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> changeIccPin2ForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> supplyNetworkDepersonalizationResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> getCurrentCallsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::Call>& calls) override;
+-    Return<void> dialResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getIMSIForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_string& imsi) override;
+-    Return<void> hangupConnectionResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> hangupWaitingOrBackgroundResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> hangupForegroundResumeBackgroundResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> switchWaitingOrHoldingAndActiveResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> conferenceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> rejectCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getLastCallFailCauseResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::LastCallFailCauseInfo& failCauseinfo) override;
+-    Return<void> getSignalStrengthResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::SignalStrength& sigStrength) override;
+-    Return<void> getVoiceRegistrationStateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::VoiceRegStateResult& voiceRegResponse) override;
+-    Return<void> getDataRegistrationStateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::DataRegStateResult& dataRegResponse) override;
+-    Return<void> getOperatorResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                     const hidl_string& longName, const hidl_string& shortName,
+-                                     const hidl_string& numeric) override;
+-    Return<void> setRadioPowerResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> sendDtmfResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> sendSmsResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                 const ::android::hardware::radio::V1_0::SendSmsResult& sms) override;
+-    Return<void> sendSMSExpectMoreResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::SendSmsResult& sms) override;
+-    Return<void> setupDataCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::SetupDataCallResult& dcResponse) override;
+-    Return<void> iccIOForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::IccIoResult& iccIo) override;
+-    Return<void> sendUssdResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> cancelPendingUssdResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getClirResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                 int32_t n, int32_t m) override;
+-    Return<void> setClirResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getCallForwardStatusResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::CallForwardInfo>& callForwardInfos) override;
+-    Return<void> setCallForwardResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getCallWaitingResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool enable,
+-        int32_t serviceClass) override;
+-    Return<void> setCallWaitingResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> acknowledgeLastIncomingGsmSmsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> acceptCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> deactivateDataCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getFacilityLockForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t response) override;
+-    Return<void> setFacilityLockForAppResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t retry) override;
+-    Return<void> setBarringPasswordResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getNetworkSelectionModeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool manual) override;
+-    Return<void> setNetworkSelectionModeAutomaticResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setNetworkSelectionModeManualResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getAvailableNetworksResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::OperatorInfo>& networkInfos) override;
+-    Return<void> startDtmfResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> stopDtmfResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getBasebandVersionResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_string& version) override;
+-    Return<void> separateConnectionResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setMuteResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getMuteResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                 bool enable) override;
+-    Return<void> getClipResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                 ::android::hardware::radio::V1_0::ClipStatus status) override;
+-    Return<void> getDataCallListResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::SetupDataCallResult>& dcResponse) override;
+-    Return<void> setSuppServiceNotificationsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> writeSmsToSimResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t index) override;
+-    Return<void> deleteSmsOnSimResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setBandModeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getAvailableBandModesResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::RadioBandMode>& bandModes) override;
+-    Return<void> sendEnvelopeResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                      const hidl_string& commandResponse) override;
+-    Return<void> sendTerminalResponseToSimResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> handleStkCallSetupRequestFromSimResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> explicitCallTransferResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setPreferredNetworkTypeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getPreferredNetworkTypeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        ::android::hardware::radio::V1_0::PreferredNetworkType nwType) override;
+-    Return<void> getNeighboringCidsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::NeighboringCell>& cells) override;
+-    Return<void> setLocationUpdatesResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setCdmaSubscriptionSourceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setCdmaRoamingPreferenceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getCdmaRoamingPreferenceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        ::android::hardware::radio::V1_0::CdmaRoamingType type) override;
+-    Return<void> setTTYModeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getTTYModeResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                    ::android::hardware::radio::V1_0::TtyMode mode) override;
+-    Return<void> setPreferredVoicePrivacyResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getPreferredVoicePrivacyResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool enable) override;
+-    Return<void> sendCDMAFeatureCodeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> sendBurstDtmfResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> sendCdmaSmsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::SendSmsResult& sms) override;
+-    Return<void> acknowledgeLastIncomingCdmaSmsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getGsmBroadcastConfigResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::GsmBroadcastSmsConfigInfo>& configs) override;
+-    Return<void> setGsmBroadcastConfigResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setGsmBroadcastActivationResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getCdmaBroadcastConfigResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::CdmaBroadcastSmsConfigInfo>& configs)
+-        override;
+-    Return<void> setCdmaBroadcastConfigResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setCdmaBroadcastActivationResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getCDMASubscriptionResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& mdn,
+-        const hidl_string& hSid, const hidl_string& hNid, const hidl_string& min,
+-        const hidl_string& prl) override;
+-    Return<void> writeSmsToRuimResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, uint32_t index) override;
+-    Return<void> deleteSmsOnRuimResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getDeviceIdentityResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, const hidl_string& imei,
+-        const hidl_string& imeisv, const hidl_string& esn, const hidl_string& meid) override;
+-    Return<void> exitEmergencyCallbackModeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getSmscAddressResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_string& smsc) override;
+-    Return<void> setSmscAddressResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> reportSmsMemoryStatusResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> reportStkServiceIsRunningResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getCdmaSubscriptionSourceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        ::android::hardware::radio::V1_0::CdmaSubscriptionSource source) override;
+-    Return<void> requestIsimAuthenticationResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_string& response) override;
+-    Return<void> acknowledgeIncomingGsmSmsWithPduResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> sendEnvelopeWithStatusResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::IccIoResult& iccIo) override;
+-    Return<void> getVoiceRadioTechnologyResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        ::android::hardware::radio::V1_0::RadioTechnology rat) override;
+-    Return<void> getCellInfoListResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::CellInfo>& cellInfo) override;
+-    Return<void> setCellInfoListRateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setInitialAttachApnResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getImsRegistrationStateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool isRegistered,
+-        ::android::hardware::radio::V1_0::RadioTechnologyFamily ratFamily) override;
+-    Return<void> sendImsSmsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::SendSmsResult& sms) override;
+-    Return<void> iccTransmitApduBasicChannelResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::IccIoResult& result) override;
+-    Return<void> iccOpenLogicalChannelResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t channelId,
+-        const hidl_vec<int8_t>& selectResponse) override;
+-    Return<void> iccCloseLogicalChannelResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> iccTransmitApduLogicalChannelResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::IccIoResult& result) override;
+-    Return<void> nvReadItemResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                    const hidl_string& result) override;
+-    Return<void> nvWriteItemResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> nvWriteCdmaPrlResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> nvResetConfigResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setUiccSubscriptionResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setDataAllowedResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getHardwareConfigResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_0::HardwareConfig>& config) override;
+-    Return<void> requestIccSimAuthenticationResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::IccIoResult& result) override;
+-    Return<void> setDataProfileResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> requestShutdownResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getRadioCapabilityResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::RadioCapability& rc) override;
+-    Return<void> setRadioCapabilityResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::RadioCapability& rc) override;
+-    Return<void> startLceServiceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::LceStatusInfo& statusInfo) override;
+-    Return<void> stopLceServiceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::LceStatusInfo& statusInfo) override;
+-    Return<void> pullLceDataResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::LceDataInfo& lceInfo) override;
+-    Return<void> getModemActivityInfoResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::ActivityStatsInfo& activityInfo) override;
+-    Return<void> setAllowedCarriersResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t numAllowed) override;
+-    Return<void> getAllowedCarriersResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, bool allAllowed,
+-        const ::android::hardware::radio::V1_0::CarrierRestrictions& carriers) override;
+-    Return<void> sendDeviceStateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setIndicationFilterResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setSimCardPowerResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> acknowledgeRequest(int32_t serial) override;
+-
+-    // Methods from ::android::hardware::radio::V1_1::IRadioResponse follow.
+-    Return<void> setCarrierInfoForImsiEncryptionResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setSimCardPowerResponse_1_1(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> startNetworkScanResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> stopNetworkScanResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> startKeepaliveResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_1::KeepaliveStatus& status) override;
+-    Return<void> stopKeepaliveResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-
+-    // Methods from ::android::hardware::radio::V1_2::IRadioResponse follow.
+-    Return<void> getCellInfoListResponse_1_2(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_2::CellInfo>& cellInfo) override;
+-    Return<void> getIccCardStatusResponse_1_2(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_2::CardStatus& cardStatus) override;
+-    Return<void> setSignalStrengthReportingCriteriaResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> setLinkCapacityReportingCriteriaResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> getCurrentCallsResponse_1_2(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::android::hardware::radio::V1_2::Call>& calls) override;
+-    Return<void> getSignalStrengthResponse_1_2(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_2::SignalStrength& signalStrength) override;
+-    Return<void> getVoiceRegistrationStateResponse_1_2(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_2::VoiceRegStateResult& voiceRegResponse) override;
+-    Return<void> getDataRegistrationStateResponse_1_2(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_2::DataRegStateResult& dataRegResponse) override;
+-
+-    // Methods from ::vendor::samsung::hardware::radio::V1_2::IRadioResponse follow.
+-    Return<void> secGetIccCardStatusReponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecCardStatus& cardStatus) override;
+-    Return<void> secSupplyNetworkDepersonalizationResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t remainingRetries) override;
+-    Return<void> secAcceptCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secDialResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secGetCurrentCallsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::vendor::samsung::hardware::radio::V1_2::SecCall>& calls) override;
+-    Return<void> secGetSignalStrengthResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecSignalStrength& sigStrength) override;
+-    Return<void> secGetVoiceRegistrationStateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecVoiceRegStateResult& voiceRegResponse)
+-        override;
+-    Return<void> secGetDataRegistrationStateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecDataRegStateResult& dataRegResponse)
+-        override;
+-    Return<void> secExplicitCallTransferResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secGetOperatorRespnse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_string& longName, const hidl_string& shortName, const hidl_string& plmn,
+-        const hidl_string& epdgname) override;
+-    Return<void> oemSetBarringPasswordResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secgetImsRegistrationStateReponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<int32_t>& regState) override;
+-    Return<void> secGetAvailableNetworkResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::vendor::samsung::hardware::radio::V1_2::SecOperatorInfo>& networkInfo)
+-        override;
+-    Return<void> oemDialEmergencyCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemCallDeflectionResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemModifyCallInitiateResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::android::hardware::radio::V1_0::LastCallFailCauseInfo& failCauseInfo) override;
+-    Return<void> oemSetImsCallListResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemGetPreferredNetworkListResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::vendor::samsung::hardware::radio::V1_2::OemPreferredNetworkInfo>& infos)
+-        override;
+-    Return<void> oemSetPreferredNetworkListResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemSendEncodedUSSDResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemHoldCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemGetDisable2gResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t isDisable) override;
+-    Return<void> oemSetDisable2gResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oenGetAcbInfoResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<int32_t>& acbInfo) override;
+-    Return<void> oemSetTransferCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemGetICBarringResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_string& numberDateList) override;
+-    Return<void> oemSetICBarringResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemQueryCnapResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                      int32_t queryCNAP) override;
+-    Return<void> oemRefreshNitzTimeResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemEnableUnsolResponseResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemCancelTransferCallResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemAcknowledgeRilConnectedResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemGetPhoneBookStorageInfoResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<int32_t>& phoneBookInfo) override;
+-    Return<void> oemUsimPbCapaResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<int32_t>& usimPbCapa) override;
+-    Return<void> oemSetSimPowerResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t power) override;
+-    Return<void> oemSetSimOnOffResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemSetSimInitEventResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemGetSimLockInfoResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<int32_t>& simLockInfO) override;
+-    Return<void> oemSupplyIccPersoResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemChangeIccPersoResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemGetPhoneBookEntryResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::OemSimPBResponse& SimPBResponseInfo) override;
+-    Return<void> oemAccessPhoneBookEntryResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t SimPbAccessResp) override;
+-    Return<void> oemGetCellBroadcastConfigResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::OemCbConfigArgs& configs) override;
+-    Return<void> oemEmergencySearchResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t respEmergencySearch) override;
+-    Return<void> oemEmergencyControlResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> oemGetAtrResponse(const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-                                   const hidl_string& atr) override;
+-    Return<void> oemSendCdmaSmsExpectMoreResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult& sms) override;
+-    Return<void> secSendSmsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult& sms) override;
+-    Return<void> secSendSMSExpectMoreResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult& sms) override;
+-    Return<void> secSendCdmaSmsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult& sms) override;
+-    Return<void> secSendImsSmsResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::SecSendSmsResult& sms) override;
+-    Return<void> secSetDataAllowedResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secGetCdmaRoamingPreferenceResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info, int32_t n,
+-        int32_t m) override;
+-    Return<void> secEnable5gResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secDisable5gResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secQuery5gStatusResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-    Return<void> secQueryNrDcParamResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::DcParam& endcDcnr) override;
+-    Return<void> secQueryNrBearerAllocationResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        int32_t bearerStatus) override;
+-    Return<void> secQueryNrSignalStrengthResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const ::vendor::samsung::hardware::radio::V1_2::NrSignalStrength& nrSignalStrength) override;
+-    Return<void> oemQueryCsgListResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info,
+-        const hidl_vec<::vendor::samsung::hardware::radio::V1_2::OemCsgInfo>& csgInfos) override;
+-    Return<void> oemSelectCsgManualResponse(
+-        const ::android::hardware::radio::V1_0::RadioResponseInfo& info) override;
+-};
+-
+-}  // namespace implementation
+-}  // namespace V1_2
+-}  // namespace radio
+-}  // namespace hardware
+-}  // namespace samsung
+-}  // namespace vendor
+diff --git a/hidl/radio/1.3/android.hardware.radio@1.3-radio-service.samsung.rc b/hidl/radio/1.3/android.hardware.radio@1.3-radio-service.samsung.rc
+deleted file mode 100644
+index ca60f53..0000000
+--- a/hidl/radio/1.3/android.hardware.radio@1.3-radio-service.samsung.rc
++++ /dev/null
+@@ -1,4 +0,0 @@
+-service vendor.radio-1-3 /vendor/bin/hw/android.hardware.radio@1.3-radio-service.samsung
+-    class hal
+-    user system
+-    group system
+diff --git a/hidl/radio/1.3/radio-service.cpp b/hidl/radio/1.3/radio-service.cpp
+deleted file mode 100644
+index 28a4690..0000000
+--- a/hidl/radio/1.3/radio-service.cpp
++++ /dev/null
+@@ -1,45 +0,0 @@
+-/*
+- * Copyright (C) 2018 The Android Open Source Project
+- * Copyright (C) 2019, The LineageOS Project
+- *
+- * Licensed under the Apache License, Version 2.1 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.1
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-#define LOG_TAG "android.hardware.radio@1.3-radio-service.samsung"
+-
+-#include <android/hardware/radio/1.3/IRadio.h>
+-#include <hidl/HidlTransportSupport.h>
+-
+-#include "Radio.h"
+-
+-using android::OK;
+-using android::sp;
+-using android::status_t;
+-using android::hardware::configureRpcThreadpool;
+-using android::hardware::joinRpcThreadpool;
+-using android::hardware::radio::V1_3::IRadio;
+-using android::hardware::radio::V1_3::implementation::Radio;
+-
+-int main() {
+-    configureRpcThreadpool(1, true);
+-
+-    sp<IRadio> radio = new Radio(RIL1_SERVICE_NAME);
+-    status_t status = radio->registerAsService(RIL1_SERVICE_NAME);
+-    ALOGW_IF(status != OK, "Could not register IRadio v1.3 %s", RIL1_SERVICE_NAME);
+-    radio = new Radio(RIL2_SERVICE_NAME);
+-    status = radio->registerAsService(RIL2_SERVICE_NAME);
+-    ALOGW_IF(status != OK, "Could not register IRadio v1.3 %s", RIL2_SERVICE_NAME);
+-    ALOGD("Default service is ready.");
+-
+-    joinRpcThreadpool();
+-    return 1;
+-}
+diff --git a/interfaces/Android.bp b/interfaces/Android.bp
+deleted file mode 100644
+index 8d0bc34..0000000
+--- a/interfaces/Android.bp
++++ /dev/null
+@@ -1,4 +0,0 @@
+-hidl_package_root {
+-    name: "vendor.samsung.hardware",
+-    use_current: true,
+-}
+diff --git a/interfaces/current.txt b/interfaces/current.txt
+deleted file mode 100644
+index 800bd6e..0000000
+--- a/interfaces/current.txt
++++ /dev/null
+@@ -1,4 +0,0 @@
+-d70c073053fc04425ee47b8ce56f01e984cd3af354c91fa9ce0e3833b84e2eda vendor.samsung.hardware.radio@1.2::types
+-e80adc3606e15e3a71e2b3451e1785287406dca19abd719064927c8477dbb7e7 vendor.samsung.hardware.radio@1.2::IRadio
+-482cdc2795dd2d3c89f81f16496a180294b00f05efc0dec599f801823f30c270 vendor.samsung.hardware.radio@1.2::IRadioIndication
+-baea5e92105d0115d9b1167a21513b5d6c77fdbac78c2e53742b550d548ef8c5 vendor.samsung.hardware.radio@1.2::IRadioResponse
+diff --git a/interfaces/radio/1.2/Android.bp b/interfaces/radio/1.2/Android.bp
+deleted file mode 100644
+index c5a4f54..0000000
+--- a/interfaces/radio/1.2/Android.bp
++++ /dev/null
+@@ -1,20 +0,0 @@
+-// This file is autogenerated by hidl-gen -Landroidbp.
+-
+-hidl_interface {
+-    name: "vendor.samsung.hardware.radio@1.2",
+-    root: "vendor.samsung.hardware",
+-    product_specific: true,
+-    srcs: [
+-        "types.hal",
+-        "IRadio.hal",
+-        "IRadioIndication.hal",
+-        "IRadioResponse.hal",
+-    ],
+-    interfaces: [
+-        "android.hardware.radio@1.0",
+-        "android.hardware.radio@1.1",
+-        "android.hardware.radio@1.2",
+-        "android.hidl.base@1.0",
+-    ],
+-    gen_java: true,
+-}
+diff --git a/interfaces/radio/1.2/IRadio.hal b/interfaces/radio/1.2/IRadio.hal
+deleted file mode 100644
+index afc8716..0000000
+--- a/interfaces/radio/1.2/IRadio.hal
++++ /dev/null
+@@ -1,72 +0,0 @@
+-package vendor.samsung.hardware.radio@1.2;
+-
+-import android.hardware.radio@1.0::ImsSmsMessage;
+-import android.hardware.radio@1.0::GsmSmsMessage;
+-import android.hardware.radio@1.0::CdmaSmsMessage;
+-import android.hardware.radio@1.2::IRadio;
+-
+-interface IRadio extends android.hardware.radio@1.2::IRadio {
+-    oneway secGetIccCardStatus(int32_t serial);
+-    oneway secSupplyNetworkDepersonalization(int32_t serial, string netPin, int32_t lockState);
+-    oneway secAcceptCall(int32_t serial, OemCallType callType);
+-    oneway secDial(int32_t serial, SecDial dialInfo);
+-    oneway secGetCurrentCalls(int32_t serial);
+-    oneway secGetSignalStrength(int32_t serial);
+-    oneway secGetVoiceRegistrationState(int32_t serial);
+-    oneway secGetDataRegistrationState(int32_t serial);
+-    oneway secExplicitCallTransfer(int32_t serial, string number);
+-    oneway secGetOperator(int32_t serial);
+-    oneway secSetBarringPassworD(int32_t serial, string facility, string oldPassword, string newPassword, string newPasswordAgain);
+-    oneway secGetImsRegistrationState(int32_t serial);
+-    oneway secGetAvailableNetworks(int32_t serial);
+-    oneway oemDialEmergencyCall(int32_t serial, SecDial dialInfo);
+-    oneway oemCallDeflection(int32_t serial, string address);
+-    oneway oemModifyCallInitiate(int32_t serial, OemCallModify callInfo);
+-    oneway oemSetImsCallList(int32_t serial, vec<OemImsCall> imsCalls);
+-    oneway oemGetPreferredNetworkList(int32_t serial);
+-    oneway oemSetPreferredNetworkList(int32_t serial, OemPreferredNetworkInfo info);
+-    oneway oemSendEncodedUSSD(int32_t serial, OemEncodedUSSD encodedUSSD);
+-    oneway oemHoldCall(int32_t serial);
+-    oneway oemGetAcbInfo(int32_t serial);
+-    oneway oemSetTransferCall(int32_t serial, vec<string> data);
+-    oneway oemGetDisable2g(int32_t serial);
+-    oneway oemSetDisable2g(int32_t serial, int32_t state);
+-    oneway oemGetICBarring(int32_t serial, string facility, string password, string serviceClass, string aid);
+-    oneway oemSetICBarring(int32_t serial, string facility, string iCBNumber, string serviceClass, string aid);
+-    oneway oemQueryCnap(int32_t serial);
+-    oneway oemRefreshNitzTime(int32_t serial);
+-    oneway oemEnableUnsolResponse(int32_t serial);
+-    oneway oemCancelTransferCall(int32_t serial, int32_t index);
+-    oneway oemAcknowledgeRilConnected(int32_t serial);
+-    oneway oemGetPhoneBookStorageInfo(int32_t serial, int32_t fileid);
+-    oneway oemGetUsimPBCapa(int32_t serial);
+-    oneway oemSetSimPower(int32_t serial, int32_t on);
+-    oneway oemSetSimOnOff(int32_t serial, int32_t mode);
+-    oneway oemSetSimInitEvent(int32_t serial);
+-    oneway oemGetSimLockInfo(int32_t serial, int32_t numLockType, int32_t lockType);
+-    oneway oemSupplyIccPerso(int32_t serial, string pin);
+-    oneway oemChangeIccPerso(int32_t serial, string oldPass, string newPass); //182
+-    oneway oemSendCdmaSmsExpectMore(int32_t serial, CdmaSmsMessage sms);
+-    oneway oemGetPhoneBookEntry(int32_t serial, int32_t fileid, int32_t p1);
+-    oneway oemAccessPhoneBookEntry(int32_t serial, int32_t command, int32_t fileid, int32_t index, OemAdnRecord adnRecord, string pin2);
+-    oneway oemGetCellBroadcastConfig(int32_t serial);
+-    oneway oemEmergencySearch(int32_t serial);
+-    oneway oemEmergencyControl(int32_t serial, int32_t command);
+-    oneway oemGetAtr(int32_t serial);
+-    oneway oemSendSms(int32_t serial, GsmSmsMessage message);
+-    oneway secSendSMSExpectMore(int32_t serial, GsmSmsMessage message);
+-    oneway secSendCdmaSms(int32_t serial, CdmaSmsMessage sms);
+-    oneway secSendImsSms(int32_t serial, ImsSmsMessage message);
+-
+-    oneway secGetCdmaRomaingPreference(int32_t serial);
+-    oneway secEnable5g(int32_t serial);
+-    oneway secEnable5gOnly(int32_t serial);
+-    oneway secDisable5g(int32_t serial);
+-    oneway secQuery5gStatus(int32_t serial);
+-    oneway secQueryNrDcParam(int32_t serial);
+-    oneway secQueryNrBearerAllocation(int32_t serial);
+-    oneway secQueryNrSignalStrength(int32_t serial);
+-    oneway oemQueryCsgList(int32_t serial);
+-    oneway oemSelectCsgManual(int32_t serial, OemCsgInfo csgInfo);
+-    oneway secSetDataAllowed(int32_t serial, bool allow, SecAllowDataParam param);
+-};
+diff --git a/interfaces/radio/1.2/IRadioIndication.hal b/interfaces/radio/1.2/IRadioIndication.hal
+deleted file mode 100644
+index 21d8831..0000000
+--- a/interfaces/radio/1.2/IRadioIndication.hal
++++ /dev/null
+@@ -1,35 +0,0 @@
+-package vendor.samsung.hardware.radio@1.2;
+-
+-import android.hardware.radio@1.2::IRadioIndication;
+-import android.hardware.radio@1.0::RadioIndicationType;
+-
+-interface IRadioIndication extends android.hardware.radio@1.2::IRadioIndication {
+-    oneway secCurrentSignalStrength(RadioIndicationType type, SecSignalStrength signalStrength);
+-    oneway secImsNetworkStateChanged(RadioIndicationType type, vec<int32_t> regState);
+-    oneway oemAcbInfoChanged(RadioIndicationType type, vec<int32_t> acbInfo);
+-    oneway oemCsFallback(RadioIndicationType type, int32_t state);
+-    oneway oemImsPreferenceChangeInd(RadioIndicationType type, vec<int32_t> imsPref);
+-    oneway oemVoiceRadioBearerHoStatusInd(RadioIndicationType type, int32_t state);
+-    oneway oemHysteresisDcnInd(RadioIndicationType type);
+-    oneway oemTimerStatusChangedInd(int32_t type, vec<int32_t> eventNoti);
+-    oneway oemModemCapInd(int32_t type, vec<int8_t> data);
+-    oneway oemAmInd(int32_t type, string intent);
+-    oneway oemTrunRadioOnInd(int32_t type);
+-    oneway oemSimPbReadyInd(int32_t type);
+-    oneway oemPbInitCompleteInd(int32_t type);
+-    oneway oemDeviceReadyNoti(int32_t type);
+-    oneway oemStkSmsSendResultInd(int32_t type, int32_t result);
+-    oneway oemStkCallControlResultInd(int32_t type, string cmd);
+-    oneway oemSimSwapStateChangedInd(int32_t type, int32_t state);
+-    oneway oemSimCountMismatchedInd(int32_t type, int32_t state);
+-    oneway oemSimIccidNoti(int32_t type, string iccid);
+-    oneway oemSimOnOffNoti(int32_t type, int32_t mode);
+-    oneway oemReleaseCompleteMessageInd(int32_t typer, OemSSReleaseComplete result);
+-    oneway oemSapNoti(int32_t type, vec<int8_t> data);
+-    oneway oemNrBearerAllocationChangeInd(int32_t type, int32_t status);
+-    oneway oem5gStatusChangeInd(int32_t type, int32_t status);
+-    oneway oemNrDcParamChangeInd(int32_t type, DcParam dcParam);
+-    oneway oemNrSignalStrengthInd(int32_t type, NrSignalStrength nrSignalStrength);
+-    oemLoadApnProfile(string select) generates (ApnProfile apnProf);
+-    oemGetSettingValue(string key, string table) generates (int32_t value);
+-};
+diff --git a/interfaces/radio/1.2/IRadioResponse.hal b/interfaces/radio/1.2/IRadioResponse.hal
+deleted file mode 100644
+index 01549bb..0000000
+--- a/interfaces/radio/1.2/IRadioResponse.hal
++++ /dev/null
+@@ -1,69 +0,0 @@
+-package vendor.samsung.hardware.radio@1.2;
+-
+-import android.hardware.radio@1.2::IRadioResponse;
+-import android.hardware.radio@1.0::LastCallFailCauseInfo;
+-import android.hardware.radio@1.0::RadioResponseInfo;
+-
+-interface IRadioResponse extends android.hardware.radio@1.2::IRadioResponse {
+-    oneway secGetIccCardStatusReponse(RadioResponseInfo info, SecCardStatus cardStatus); //143
+-    oneway secSupplyNetworkDepersonalizationResponse(RadioResponseInfo info, int32_t remainingRetries);
+-    oneway secAcceptCallResponse(RadioResponseInfo info);
+-    oneway secDialResponse(RadioResponseInfo info);
+-    oneway secGetCurrentCallsResponse(RadioResponseInfo info, vec<SecCall> calls);
+-    oneway secGetSignalStrengthResponse(RadioResponseInfo info, SecSignalStrength sigStrength);
+-    oneway secGetVoiceRegistrationStateResponse(RadioResponseInfo info, SecVoiceRegStateResult voiceRegResponse);
+-    oneway secGetDataRegistrationStateResponse(RadioResponseInfo info, SecDataRegStateResult dataRegResponse);
+-    oneway secExplicitCallTransferResponse(RadioResponseInfo info);
+-    oneway secGetOperatorRespnse(RadioResponseInfo info, string longName, string shortName, string plmn, string epdgname); //153
+-    oneway oemSetBarringPasswordResponse(RadioResponseInfo info);
+-    oneway secgetImsRegistrationStateReponse(RadioResponseInfo info, vec<int32_t> regState);
+-    oneway secGetAvailableNetworkResponse(RadioResponseInfo info, vec<SecOperatorInfo> networkInfo);
+-    oneway oemDialEmergencyCallResponse(RadioResponseInfo info);
+-    oneway oemCallDeflectionResponse(RadioResponseInfo info);
+-    oneway oemModifyCallInitiateResponse(RadioResponseInfo info, LastCallFailCauseInfo failCauseInfo);
+-    oneway oemSetImsCallListResponse(RadioResponseInfo info);
+-    oneway oemGetPreferredNetworkListResponse(RadioResponseInfo info, vec<OemPreferredNetworkInfo> infos);
+-    oneway oemSetPreferredNetworkListResponse(RadioResponseInfo info);
+-    oneway oemSendEncodedUSSDResponse(RadioResponseInfo info); //163
+-    oneway oemHoldCallResponse(RadioResponseInfo info);
+-    oneway oemGetDisable2gResponse(RadioResponseInfo info, int32_t isDisable);
+-    oneway oemSetDisable2gResponse(RadioResponseInfo info);
+-    oneway oenGetAcbInfoResponse(RadioResponseInfo info, vec<int32_t> acbInfo);
+-    oneway oemSetTransferCallResponse(RadioResponseInfo info);
+-    oneway oemGetICBarringResponse(RadioResponseInfo info, string numberDateList);
+-    oneway oemSetICBarringResponse(RadioResponseInfo info);
+-    oneway oemQueryCnapResponse(RadioResponseInfo info, int32_t queryCNAP);
+-    oneway oemRefreshNitzTimeResponse(RadioResponseInfo info);
+-    oneway oemEnableUnsolResponseResponse(RadioResponseInfo info); //173
+-    oneway oemCancelTransferCallResponse(RadioResponseInfo info);
+-    oneway oemAcknowledgeRilConnectedResponse(RadioResponseInfo info);
+-    oneway oemGetPhoneBookStorageInfoResponse(RadioResponseInfo info, vec<int32_t> phoneBookInfo);
+-    oneway oemUsimPbCapaResponse(RadioResponseInfo info, vec<int32_t> usimPbCapa);
+-    oneway oemSetSimPowerResponse(RadioResponseInfo info, int32_t power);
+-    oneway oemSetSimOnOffResponse(RadioResponseInfo info);
+-    oneway oemSetSimInitEventResponse(RadioResponseInfo info);
+-    oneway oemGetSimLockInfoResponse(RadioResponseInfo info, vec<int32_t> simLockInfO);
+-    oneway oemSupplyIccPersoResponse(RadioResponseInfo info);
+-    oneway oemChangeIccPersoResponse(RadioResponseInfo info); //183
+-    oneway oemGetPhoneBookEntryResponse(RadioResponseInfo info, OemSimPBResponse SimPBResponseInfo);
+-    oneway oemAccessPhoneBookEntryResponse(RadioResponseInfo info, int32_t SimPbAccessResp);
+-    oneway oemGetCellBroadcastConfigResponse(RadioResponseInfo info, OemCbConfigArgs configs);
+-    oneway oemEmergencySearchResponse(RadioResponseInfo info, int32_t respEmergencySearch);
+-    oneway oemEmergencyControlResponse(RadioResponseInfo info);
+-    oneway oemGetAtrResponse(RadioResponseInfo info, string atr);
+-    oneway oemSendCdmaSmsExpectMoreResponse(RadioResponseInfo info, SecSendSmsResult sms);
+-    oneway secSendSmsResponse(RadioResponseInfo info, SecSendSmsResult sms);
+-    oneway secSendSMSExpectMoreResponse(RadioResponseInfo info, SecSendSmsResult sms);
+-    oneway secSendCdmaSmsResponse(RadioResponseInfo info, SecSendSmsResult sms); //193
+-    oneway secSendImsSmsResponse(RadioResponseInfo info, SecSendSmsResult sms);
+-    oneway secSetDataAllowedResponse(RadioResponseInfo info);
+-    oneway secGetCdmaRoamingPreferenceResponse(RadioResponseInfo info, int32_t n, int32_t m);
+-    oneway secEnable5gResponse(RadioResponseInfo info);
+-    oneway secDisable5gResponse(RadioResponseInfo info);
+-    oneway secQuery5gStatusResponse(RadioResponseInfo info);
+-    oneway secQueryNrDcParamResponse(RadioResponseInfo info, DcParam endcDcnr);
+-    oneway secQueryNrBearerAllocationResponse(RadioResponseInfo info, int32_t bearerStatus);
+-    oneway secQueryNrSignalStrengthResponse(RadioResponseInfo info, NrSignalStrength nrSignalStrength);
+-    oneway oemQueryCsgListResponse(RadioResponseInfo info, vec<OemCsgInfo> csgInfos);
+-    oneway oemSelectCsgManualResponse(RadioResponseInfo info); //205
+-};
+diff --git a/interfaces/radio/1.2/types.hal b/interfaces/radio/1.2/types.hal
+deleted file mode 100644
+index 188857f..0000000
+--- a/interfaces/radio/1.2/types.hal
++++ /dev/null
+@@ -1,209 +0,0 @@
+-package vendor.samsung.hardware.radio@1.2;
+-
+-import android.hardware.radio@1.0::AppStatus;
+-import android.hardware.radio@1.0::Dial;
+-import android.hardware.radio@1.0::OperatorInfo;
+-import android.hardware.radio@1.2::AudioQuality;
+-import android.hardware.radio@1.2::Call;
+-import android.hardware.radio@1.2::SignalStrength;
+-import android.hardware.radio@1.2::VoiceRegStateResult;
+-import android.hardware.radio@1.2::DataRegStateResult;
+-
+-struct SecSignalStrength {
+-    SignalStrength base;
+-    int32_t signalBar;
+-};
+-
+-struct OemSSReleaseComplete {
+-    int32_t size;
+-    int32_t dataLen;
+-    int32_t params;
+-    int32_t status;
+-    string data;
+-};
+-
+-struct OemSimPBResponse {
+-    vec<int32_t> lengthAlphas;
+-    vec<int32_t> dataTypeAlphas;
+-    vec<string> alphaTags;
+-    vec<int32_t> lengthNumbers;
+-    vec<int32_t> dataTypeNumbers;
+-    vec<string> numbers;
+-    int32_t recordIndex;
+-    int32_t nextIndex;
+-};
+-
+-struct OemCbConfigArgs {
+-    int32_t bCBEnabled;
+-    int32_t selectedId;
+-    int32_t msgIdMaxCount;
+-    int32_t msgIdCount;
+-    string msgIDs;
+-};
+-
+-struct SecSendSmsResult {
+-    int32_t messageReg;
+-    string ackPDU;
+-    int32_t errorCode;
+-    int32_t errorClass;
+-};
+-
+-struct OemCsgInfo {
+-    int32_t csgId;
+-    string name;
+-    string plmn;
+-    int32_t rat;
+-    int32_t category;
+-    int32_t signalStrength;
+-};
+-
+-struct SecAllowDataParam {
+-    int32_t defaultDataPhoneId;
+-    int32_t isDataPreferredDuringCall;
+-};
+-
+-enum OemCallType : int32_t {
+-    VOICE = 0,
+-    VS_TX = 1,
+-    TS_RX = 2,
+-    VT = 3,
+-};
+-
+-enum OemCallDomain : int32_t {
+-    UNKNOWN = 0,
+-    CS = 1,
+-    PS = 2,
+-    AUTOMATIC = 3,
+-};
+-
+-struct OemCallDetails {
+-    OemCallType callType;
+-    OemCallDomain callDomain;
+-    vec<string> extras;
+-};
+-
+-struct OemCallModify {
+-    int32_t callIndex;
+-    vec<OemCallDetails> callDetails;
+-};
+-
+-struct SecDial {
+-    Dial base;
+-    vec<OemCallDetails> callDetails;
+-};
+-
+-struct OemPreferredNetworkInfo {
+-    int32_t index;
+-    string oper;
+-    string plmn;
+-    int32_t gsmAct;
+-    int32_t gsmCompactAct;
+-    int32_t utranAct;
+-    int32_t mode;
+-};
+-
+-struct OemEncodedUSSD {
+-    vec<int8_t> encodedUSSD;
+-    int32_t ussdLength;
+-    int32_t dcsCode;
+-};
+-
+-struct OemAdnRecord {
+-    vec<int8_t> name;
+-    int32_t nameDCS;
+-    int32_t namelength;
+-    string number;
+-    vec<int8_t> gsm8bitEmail;
+-    int32_t gsm8bitEmaillength;
+-    string anr;
+-    string anrA;
+-    string anrB;
+-    string anrC;
+-    vec<int8_t> sne;
+-    int32_t sneLength;
+-    int32_t sneDCS;
+-
+-};
+-
+-struct OemImsCall {
+-    int32_t state;
+-    int32_t type;
+-    int32_t isMt;
+-    int32_t isMpty;
+-    string number;
+-};
+-
+-struct DcParam {
+-    int32_t endc_available;
+-    int32_t restrict_dcnr;
+-};
+-
+-struct NrSignalStrength {
+-    int32_t rsrp;
+-    int32_t snr;
+-};
+-
+-struct ApnProfile {
+-    string apn;
+-    string proto;
+-    string roamingProto;
+-    string user;
+-    string pw;
+-    string auth;
+-};
+-
+-struct SecAppStatus {
+-    AppStatus base;
+-    int32_t pin1NumRetries;
+-    int32_t puk1NumRetries;
+-    int32_t pin2NumRetries;
+-    int32_t puk2NumRetries;
+-    int32_t persoUnblockRetries;
+-};
+-
+-struct SecCardStatus {
+-    int32_t cardState;
+-    int32_t universalPinState;
+-    int32_t gsmUmtsSubscriptionAppIndex;
+-    int32_t cdmaSubscriptionAppIndex;
+-    int32_t imsSubscriptionAppIndex;
+-    vec<SecAppStatus> applications;
+-    int32_t physicalSlotId;
+-    int32_t atr;
+-    int32_t iccid;
+-};
+-
+-struct SecVoiceRegStateResult {
+-    VoiceRegStateResult base;
+-    int32_t lac;
+-    int32_t cid;
+-    int32_t psVoiceSupport;
+-    int32_t imsEmergencyCallSupport;
+-    int32_t imsEmergencyCallBarring;
+-    int32_t mobileState;
+-    int32_t mobileRat;
+-    bool isPsOnlyReg;
+-};
+-
+-struct SecDataRegStateResult {
+-    DataRegStateResult base;
+-    int32_t lac;
+-    int32_t cid;
+-    int32_t tac;
+-    int32_t snapshotStatus;
+-    int32_t mobileState;
+-    int32_t mobileRat;
+-    int32_t mobileOptionalRat;
+-};
+-
+-struct SecCall {
+-    Call base;
+-    AudioQuality audioQuality;
+-    vec<OemCallDetails> callDetails;
+-};
+-
+-struct SecOperatorInfo {
+-    OperatorInfo base;
+-    string rat;
+-    string lac;
+-};
+-- 
+2.25.1
+
